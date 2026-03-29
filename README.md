@@ -71,24 +71,49 @@ The gateway uses these models by default:
 
 Override via `MODEL_REGISTRY` in `artifactforge/agents/llm_gateway.py`.
 
-Architecture
+## MCRS Pipeline Architecture
+
+The MCRS (Multi-agent Content Reasoning System) is a 10-agent pipeline with epistemic tracking:
+
 ```
-User Description
-      │
-      ▼
-   ┌───────┐     ┌──────────┐     ┌─────────┐
-   │Router │────▶│Coordinator│────▶│ Output  │
-   └───────┘     └─────┬────┘     └─────────┘
-                        │
-           ┌───────────┼───────────┐
-           ▼           ▼           ▼
-       Research    Generate     Review
-           │           │           │
-           ▼           ▼           ▼
-      WebSearch   RFP Gen    Compliance
-      Analysis    Blog Gen   Technical
-                               Style
+User Prompt
+     │
+     ▼
+┌─────────────────┐
+│ Intent Architect │ ──▶ Execution Brief
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│   Research Lead  │ ──▶ Research Map
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  Evidence Ledger │ ──▶ Claim Ledger (epistemic classification)
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│     Analyst      │ ──▶ Analytical Backbone
+└────────┬────────┘
+         ▼
+┌──────────────────┐
+│ Output Strategist │ ──▶ Content Blueprint
+└────────┬─────────┘
+         ▼
+┌─────────────────┐
+│   Draft Writer   │ ──▶ Draft v1
+└────────┬────────┘
+         ▼
+┌─────────────────────┐
+│ Adversarial Reviewer │ ──┬──▶ Verify → Final Arbiter ──▶ Polish ──▶ END
+└─────────────────────┘    │              ▲
+                           └───revise──────┘
 ```
+
+**Key Features:**
+- **Epistemic Tracking**: Evidence Ledger classifies claims (VERIFIED/UNVERIFIED/SPECULATIVE)
+- **Revision Loops**: Max 3 revisions between Draft Writer ↔ Reviewer
+- **Final Arbiter**: Routes to polish, revise_draft, revise_research, or end
+- **Checkpointing**: LangGraph MemorySaver for state persistence
 ## Artifact Types
 ArtifactForge ships with schemas for:
 - RFPs — Request for Proposals with requirements, timeline, budget
