@@ -1,0 +1,13 @@
+{
+  "active": true,
+  "iteration": 1,
+  "minIterations": 1,
+  "maxIterations": 10,
+  "completionPromise": "COMPLETE",
+  "tasksMode": true,
+  "taskPromise": "READY_FOR_NEXT_TASK",
+  "prompt": "\nImplement the architecture defined in artifactforge-design/MCRS_pipeline_spec_detailed.md.\n\nSteps:\n\t1\tRead the markdown spec and extract all agent roles, schemas, and workflow rules.\n\t2\tCreate an implementation plan and save it to docs/implementation-plan.md.\n\t3\tScaffold the project structure:\n\t◦\tsrc/agents/\n\t◦\tsrc/schemas/\n\t◦\tsrc/coordinator/\n\t◦\tsrc/pipeline/\n\t◦\ttests/\n\t4\tImplement:\n\t◦\tAll agent interfaces\n\t◦\tJSON schemas for artifacts\n\t◦\tCoordinator orchestration logic\n\t◦\tRevision loops (reviewer → writer, verifier → writer, arbiter → coordinator)\n\t◦\tBlocking gates for failures\n\t5\tAdd tests for:\n\t◦\tschema validation\n\t◦\tpipeline execution\n\t◦\trevision loops\n\t◦\tarbiter blocking behavior\n\t6\tAdd a runnable example:\n\t◦\tinput → full pipeline → final output\n\t7\tUpdate README.md with usage instructions\n\n\nConstraints:\n\t•\tDo NOT collapse all logic into one agent\n\t•\tDo NOT skip revision loops or gates\n\t•\tDo NOT invent behavior not in spec\n\t•\tPreserve strict separation of responsibilities\n\n\nImplementation rules:\n\t•\tTreat each agent in the spec as a distinct module/component\n\t•\tDo NOT merge multiple agents into one class or function\n\t•\tDo NOT collapse pipeline stages\n\t•\tPreserve explicit artifact passing between agents\n\t•\tMaintain strict schema boundaries between stages\n\t•\tImplement revision loops exactly as defined\n\n\nCompletion Criteria:\n\t•\tCode compiles/runs\n\t•\tTests pass\n\t•\tExample pipeline works end-to-end\n\t•\tREADME explains usage\n\n\nOutput <promise>COMPLETE</promise> only when everything is implemented and working.\n",
+  "startedAt": "2026-03-29T02:00:15.700Z",
+  "model": "",
+  "agent": "opencode"
+}
