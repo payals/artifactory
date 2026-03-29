@@ -1,5 +1,6 @@
 """Centralized LLM Gateway - Single point for all LLM activity monitoring."""
 
+import asyncio
 import json
 import logging
 import time
@@ -20,28 +21,31 @@ logger = logging.getLogger(__name__)
 
 MODEL_REGISTRY = {
     "default": "z-ai/glm-4.5-air:free",
-    "reasoning": "z-ai/glm-4.5-air:free",
+    "reasoning": "meta-llama/llama-3.2-3b-instruct:free",
     "deep_reasoning": "nvidia/nemotron-3-nano-30b-a3b:free",
-    "coding": "qwen/qwen2.5-coder-7b-instruct",
-    "review": "meta-llama/llama-3.2-3b-instruct",
-    "verification": "meta-llama/llama-3.2-3b-instruct",
-    "cheap_worker": "z-ai/glm-4.5-air:free",
-    "fallback_1": "anthropic/claude-3-haiku",
+    "coding": "qwen/qwen3-coder:free",
+    "review": "google/gemma-3-4b-it:free",
+    "verification": "google/gemma-3-4b-it:free",
+    "cheap_worker": "google/gemma-3n-e2b-it:free",
+    "fallback_1": "liquid/lfm-2.5-1.2b-instruct:free",
     "fallback_2": "z-ai/glm-4.5-air:free",
 }
 
 AGENT_TO_MODEL = {
-    "intent_architect": "reasoning",
+    "intent_architect": "default",
     "research_lead": "reasoning",
     "evidence_ledger": "cheap_worker",
     "analyst": "deep_reasoning",
-    "output_strategist": "reasoning",
+    "output_strategist": "default",
     "draft_writer": "reasoning",
     "coding_writer": "coding",
     "adversarial_reviewer": "review",
     "verifier": "verification",
     "polisher": "cheap_worker",
-    "final_arbiter": "review",
+    "final_arbiter": "default",
+    "visual_designer": "cheap_worker",
+    "visual_reviewer": "verification",
+    "visual_generator": "cheap_worker",
 }
 
 AGENT_TEMPERATURES = {
@@ -55,6 +59,9 @@ AGENT_TEMPERATURES = {
     "verifier": 0.0,
     "polisher": 0.4,
     "final_arbiter": 0.1,
+    "visual_designer": 0.3,
+    "visual_reviewer": 0.1,
+    "visual_generator": 0.1,
 }
 
 FREE_MODEL_PREFERENCES = {
@@ -487,9 +494,14 @@ async def call_llm_async(
     candidates = model_candidates_for_agent(agent_name) if agent_name else [model]
     last_error = None
 
-    for attempt_model in candidates:
+    for attempt_idx, attempt_model in enumerate(candidates):
         request_id = str(uuid.uuid4())[:8]
         timestamp = datetime.utcnow()
+
+        if attempt_idx > 0:
+            wait_time = min(2 ** (attempt_idx - 1) * 0.5, 8)
+            logger.info(f"Rate limited, waiting {wait_time:.1f}s before retry...")
+            await asyncio.sleep(wait_time)
 
         start_time = time.perf_counter()
         success = False
@@ -512,9 +524,11 @@ async def call_llm_async(
         except Exception as e:
             error = str(e)
             last_error = error
-            logger.warning(
-                f"LLM request {request_id} failed with {attempt_model}: {e}. Trying next model..."
-            )
+            is_rate_limit = "429" in str(e) or "rate limit" in str(e).lower()
+            if is_rate_limit:
+                logger.warning(f"Rate limited on {attempt_model}, backing off...")
+                continue
+            logger.warning(f"LLM request {request_id} failed with {attempt_model}: {e}")
             continue
 
         duration_ms = (time.perf_counter() - start_time) * 1000
