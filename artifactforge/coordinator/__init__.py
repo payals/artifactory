@@ -3,53 +3,19 @@
 from typing import Any, Optional
 
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import END, StateGraph
+from langgraph.graph import StateGraph
 
-from artifactforge.coordinator.state import GraphState
-from artifactforge.coordinator import nodes
+from artifactforge.coordinator.state import MCRSState
+from artifactforge.coordinator import mcrs_graph
 
 
 def create_app(checkpointer: Optional[Any] = None) -> StateGraph:
-    """Create the LangGraph application."""
-    graph = StateGraph(GraphState)
+    """Create MCRS LangGraph application (10-agent system).
 
-    graph.add_node("router", nodes.router_node)
-    graph.add_node("research", nodes.research_node)
-    graph.add_node("generate", nodes.generate_node)
-    graph.add_node("review", nodes.review_node)
-    graph.add_node("verify", nodes.verify_node)
-    graph.add_node("ask_user", nodes.ask_user_node)
-
-    graph.set_entry_point("router")
-
-    graph.add_edge("router", "research")
-    graph.add_edge("research", "generate")
-    graph.add_edge("generate", "review")
-    graph.add_edge("review", "verify")
-
-    def should_continue(state: GraphState) -> str:
-        if state.get("verification_status") == "passed":
-            return "end"
-        return "ask_user"
-
-    graph.add_conditional_edges(
-        "verify",
-        should_continue,
-        {
-            "end": END,
-            "ask_user": "ask_user",
-        },
-    )
-
-    graph.add_edge("ask_user", "research")
-
-    compile_kwargs: dict[str, Any] = {}
-    if checkpointer:
-        compile_kwargs["checkpointer"] = checkpointer
-    else:
-        compile_kwargs["checkpointer"] = MemorySaver()
-
-    return graph.compile(**compile_kwargs)
+    Args:
+        checkpointer: Optional checkpoint store
+    """
+    return mcrs_graph.create_mcrs_app(checkpointer)
 
 
 def create_postgres_checkpointer(database_url: str) -> Any:
@@ -69,4 +35,8 @@ def create_postgres_checkpointer(database_url: str) -> Any:
 app = create_app()
 
 
-__all__ = ["app", "create_app", "create_postgres_checkpointer"]
+__all__ = [
+    "app",
+    "create_app",
+    "create_postgres_checkpointer",
+]

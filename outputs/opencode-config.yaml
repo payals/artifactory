@@ -1,0 +1,107 @@
+# oh-my-openagent configuration
+# Generated automatically using free OpenCode Zen models + OpenAI models
+#
+# Free OpenCode Zen Models Available:
+#   - opencode/minimax-m2.5-free
+#   - opencode/nemotron-3-super-free
+#   - opencode/mimo-v2-pro-free
+#   - opencode/mimo-v2-omni-free
+#   - opencode/big-pickle
+
+# Free OpenAI Models:
+#   - gpt-5-nano
+#
+# Total OpenAI Models Available: 29
+#
+# Model Assignment Strategy:
+# - Sisyphus/Hephaestus: Primary reasoning (free minimax when available)
+# - Prometheus/Oracle: High intelligence (paid GPT-5.4)
+# - Explore/Atlas: Fast utility (free Nemotron or cheap nano)
+# - Librarian/Momus: Cost-effective (GPT-4o-mini)
+# - Deep: Reasoning (O3)
+# - Quick: Fast/cheap (GPT-5.4-nano)
+
+agents:
+  sisyphus:
+    model: opencode/minimax-m2.5-free
+    temperature: 0.7
+    fallback_models:
+    - gpt-5.4
+    - gpt-4o
+  prometheus:
+    model: gpt-5.4
+    temperature: 0.5
+    fallback_models:
+    - gpt-5.1
+    - gpt-4o
+  metis:
+    model: gpt-4o
+    temperature: 0.3
+    fallback_models:
+    - gpt-4o-mini
+    - gpt-4.1
+  oracle:
+    model: gpt-5.4
+    temperature: 0.2
+    fallback_models:
+    - o3
+    - gpt-5.1
+  momus:
+    model: gpt-4o-mini
+    temperature: 0.3
+    fallback_models:
+    - gpt-4.1
+    - opencode/minimax-m2.5-free
+  explore:
+    model: opencode/nemotron-3-super-free
+    temperature: 0.3
+    fallback_models:
+    - gpt-5.4-nano
+    - gpt-4o-mini
+  librarian:
+    model: gpt-4o-mini
+    temperature: 0.3
+    fallback_models:
+    - gpt-4.1
+    - opencode/minimax-m2.5-free
+  hephaestus:
+    model: opencode/minimax-m2.5-free
+    temperature: 0.7
+    fallback_models:
+    - gpt-5.4-mini
+    - gpt-4o
+  atlas:
+    model: opencode/nemotron-3-super-free
+    temperature: 0.3
+    fallback_models:
+    - gpt-5.4-nano
+    - gpt-4o-mini
+  multimodal-looker:
+    model: gpt-5.4
+    temperature: 0.5
+    fallback_models:
+    - gpt-4o
+    - o3
+  deep:
+    model: o3
+    temperature: 0.3
+    fallback_models:
+    - gpt-5.4
+    - o1
+  quick:
+    model: gpt-5.4-nano
+    temperature: 0.5
+    fallback_models:
+    - gpt-4o-mini
+    - opencode/minimax-m2.5-free
+model_preferences:
+  free:
+    reasoning: opencode/minimax-m2.5-free
+    fast: gpt-5.4-nano
+    balanced: opencode/minimax-m2.5-free
+  paid:
+    premium: gpt-5.4
+    reasoning: o3
+    fast: gpt-5.4-nano
+    balanced: gpt-4o
+    code: gpt-5.3-codex

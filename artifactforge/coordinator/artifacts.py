@@ -1,0 +1,244 @@
+"""MCRS Artifact Schemas - Structured data definitions for multi-agent pipeline."""
+
+from typing import Literal, Optional, TypedDict
+
+
+# =============================================================================
+# Phase 1: Intent
+# =============================================================================
+
+
+class ExecutionBrief(TypedDict):
+    """Output from Intent Architect - defines execution parameters."""
+
+    user_goal: str
+    output_type: str  # report, blog, slides, memo, decision_doc, technical_writeup
+    audience: str
+    tone: str  # formal, conversational, technical, persuasive
+    must_answer_questions: list[str]
+    constraints: list[str]
+    success_criteria: list[str]
+    likely_missing_dimensions: list[str]
+    decision_required: bool
+    rigor_level: Literal["LOW", "MEDIUM", "HIGH"]
+    persuasion_level: Literal["LOW", "MEDIUM", "HIGH"]
+    open_questions_to_resolve: list[str]
+
+
+# =============================================================================
+# Phase 2: Research
+# =============================================================================
+
+
+class ResearchSource(TypedDict):
+    """Individual source in research map."""
+
+    source_id: str
+    title: str
+    url: Optional[str]
+    source_type: Literal[
+        "official", "news", "research", "reference", "internal", "other"
+    ]
+    reliability: Literal["HIGH", "MEDIUM", "LOW"]
+    notes: str
+    publish_date: Optional[str]
+
+
+class ResearchMap(TypedDict):
+    """Output from Research Lead - gathered information terrain."""
+
+    sources: list[ResearchSource]
+    facts: list[str]  # Raw factual statements extracted
+    key_dimensions: list[str]  # Critical aspects to cover
+    competing_views: list[str]  # Conflicting perspectives
+    data_gaps: list[str]  # Known missing information
+    followup_questions: list[str]
+
+
+# =============================================================================
+# Phase 3: Evidence (CORE)
+# =============================================================================
+
+
+class Claim(TypedDict):
+    """Single claim with epistemic classification."""
+
+    claim_id: str  # e.g., "C001"
+    claim_text: str
+    classification: Literal["VERIFIED", "DERIVED", "ASSUMED"]
+    source_refs: list[str]  # source_ids
+    confidence: float  # 0.0-1.0
+    importance: Literal["HIGH", "MEDIUM", "LOW"]
+    dependent_on: list[str]  # claim_ids this depends on
+    notes: str  # Reasoning for classification
+
+
+class ClaimLedger(TypedDict):
+    """Output from Evidence Ledger - epistemically classified claims."""
+
+    claims: list[Claim]
+    summary: str  # High-level summary of epistemic status
+
+
+# =============================================================================
+# Phase 4: Analysis
+# =============================================================================
+
+
+class AnalyticalBackbone(TypedDict):
+    """Output from Analyst - second-order reasoning."""
+
+    key_findings: list[str]
+    primary_drivers: list[str]  # What drives the outcome
+    implications: list[str]  # Second-order effects
+    risks: list[str]
+    sensitivities: list[str]  # How result changes with assumptions
+    counterarguments: list[str]
+    recommendation_logic: list[str]  # Chain of reasoning for recommendation
+    open_unknowns: list[str]  # Unresolved uncertainties
+
+
+# =============================================================================
+# Phase 5: Strategy
+# =============================================================================
+
+
+class ContentBlueprint(TypedDict):
+    """Output from Output Strategist - communication structure."""
+
+    structure: list[str]  # Section headers in order
+    section_purposes: dict[str, str]  # section -> purpose
+    narrative_flow: str  # How the reader journeys through content
+    visual_elements: list[dict]  # Tables, charts, diagrams to include
+    key_takeaways: list[str]  # 3-5 main points to remember
+    audience_guidance: list[str]  # How to help audience understand
+
+
+# =============================================================================
+# Phase 7: Review
+# =============================================================================
+
+
+class RedTeamIssue(TypedDict):
+    """Single issue from adversarial review."""
+
+    issue_id: str  # e.g., "R001"
+    severity: Literal["HIGH", "MEDIUM", "LOW"]
+    section: str
+    problem_type: Literal[
+        "missing_dimension",
+        "unsupported_claim",
+        "shallow_analysis",
+        "overconfidence",
+        "weak_recommendation",
+        "audience_mismatch",
+        "poor_structure",
+        "misleading_framing",
+        "unaddressed_risk",
+        "unexamined_assumption",
+    ]
+    explanation: str
+    suggested_fix: str
+
+
+class RedTeamReview(TypedDict):
+    """Output from Adversarial Reviewer - critique findings."""
+
+    issues: list[RedTeamIssue]
+    overall_assessment: str
+    passed: bool
+
+
+# =============================================================================
+# Phase 8: Verification
+# =============================================================================
+
+
+class VerificationItem(TypedDict):
+    """Single claim verification result."""
+
+    claim_id: str
+    status: Literal["SUPPORTED", "WEAK", "UNSUPPORTED", "INCONSISTENT"]
+    notes: str
+    required_action: Optional[
+        Literal[
+            "add_source",
+            "reclassify_claim",
+            "downgrade_language",
+            "remove_claim",
+            "fix_number",
+            "resolve_contradiction",
+        ]
+    ]
+
+
+class VerificationReport(TypedDict):
+    """Output from Verifier - claim support status."""
+
+    items: list[VerificationItem]
+    summary: str
+    passed: bool
+
+
+# =============================================================================
+# Phase 10: Release
+# =============================================================================
+
+
+class ReleaseDecision(TypedDict):
+    """Output from Final Arbiter - release readiness."""
+
+    status: Literal["READY", "NOT_READY"]
+    confidence: float  # 0.0-1.0
+    remaining_risks: list[str]
+    known_gaps: list[str]
+    notes: str
+
+
+# =============================================================================
+# Revision Tracking
+# =============================================================================
+
+
+class RevisionEntry(TypedDict):
+    """Single revision in history."""
+
+    version: int
+    trigger: str  # What caused revision (review, verification, arbiter)
+    issues_addressed: list[str]
+    changes_made: str
+    timestamp: str
+
+
+# =============================================================================
+# Schema Registry
+# =============================================================================
+
+ARTIFACT_SCHEMAS = {
+    "execution_brief": ExecutionBrief,
+    "research_map": ResearchMap,
+    "claim_ledger": ClaimLedger,
+    "analytical_backbone": AnalyticalBackbone,
+    "content_blueprint": ContentBlueprint,
+    "red_team_review": RedTeamReview,
+    "verification_report": VerificationReport,
+    "release_decision": ReleaseDecision,
+}
+
+
+__all__ = [
+    "ExecutionBrief",
+    "ResearchSource",
+    "ResearchMap",
+    "Claim",
+    "ClaimLedger",
+    "AnalyticalBackbone",
+    "ContentBlueprint",
+    "RedTeamIssue",
+    "RedTeamReview",
+    "VerificationItem",
+    "VerificationReport",
+    "ReleaseDecision",
+    "RevisionEntry",
+    "ARTIFACT_SCHEMAS",
+]

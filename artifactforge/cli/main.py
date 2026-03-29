@@ -22,14 +22,22 @@ class GenerateInput(BaseModel):
 
 async def generate(artifact_type: str, description: str) -> dict:
     """Generate an artifact."""
+    from artifactforge.agents.llm_gateway import run_model_preflight_check
+
+    logger.info("Running model preflight check...")
+    preflight_result = run_model_preflight_check()
+    logger.info("Preflight check complete", result=preflight_result)
+
     initial_state = {
         "artifact_type": artifact_type,
-        "user_description": description,
+        "user_prompt": description,
         "verification_status": "pending",
         "num_retries": 0,
     }
 
-    result = await app.ainvoke(initial_state)
+    result = await app.ainvoke(
+        initial_state, config={"configurable": {"thread_id": "cli-session"}}
+    )
     return result
 
 

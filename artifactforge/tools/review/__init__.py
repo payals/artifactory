@@ -1,5 +1,1 @@
-"""Review tools."""
-
-from artifactforge.tools.review.generic_reviewer import generic_reviewer
-
-__all__ = ["generic_reviewer"]
+"""Review tools - MCRS uses agents.adversarial_reviewer and agents.verifier."""

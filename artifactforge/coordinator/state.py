@@ -1,12 +1,14 @@
 """LangGraph state definitions."""
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from typing_extensions import TypedDict
 
+from artifactforge.coordinator import artifacts as mcrs_artifacts
+
 
 class GraphState(TypedDict):
-    """Main graph state."""
+    """Main graph state - legacy simple pipeline."""
 
     # Identification
     artifact_id: Optional[str]
@@ -42,4 +44,80 @@ class GraphState(TypedDict):
     num_retries: int
 
 
-__all__ = ["GraphState"]
+class MCRSState(TypedDict):
+    """MCRS multi-agent pipeline state with full epistemic tracking."""
+
+    # =========================================================================
+    # Input
+    # =========================================================================
+    user_prompt: str
+    conversation_context: Optional[list[dict]]
+    output_constraints: Optional[dict]
+
+    # =========================================================================
+    # Phase 1: Intent
+    # =========================================================================
+    execution_brief: Optional[mcrs_artifacts.ExecutionBrief]
+
+    # =========================================================================
+    # Phase 2: Research
+    # =========================================================================
+    research_map: Optional[mcrs_artifacts.ResearchMap]
+
+    # =========================================================================
+    # Phase 3: Evidence (CORE - epistemic classification)
+    # =========================================================================
+    claim_ledger: Optional[mcrs_artifacts.ClaimLedger]
+
+    # =========================================================================
+    # Phase 4: Analysis
+    # =========================================================================
+    analytical_backbone: Optional[mcrs_artifacts.AnalyticalBackbone]
+
+    # =========================================================================
+    # Phase 5: Strategy
+    # =========================================================================
+    content_blueprint: Optional[mcrs_artifacts.ContentBlueprint]
+
+    # =========================================================================
+    # Phase 6: Draft
+    # =========================================================================
+    draft_v1: Optional[str]
+    draft_version: int
+
+    # =========================================================================
+    # Phase 7: Review
+    # =========================================================================
+    red_team_review: Optional[mcrs_artifacts.RedTeamReview]
+
+    # =========================================================================
+    # Phase 8: Verification
+    # =========================================================================
+    verification_report: Optional[mcrs_artifacts.VerificationReport]
+
+    # =========================================================================
+    # Phase 9: Polish
+    # =========================================================================
+    polished_draft: Optional[str]
+
+    # =========================================================================
+    # Phase 10: Release
+    # =========================================================================
+    release_decision: Optional[mcrs_artifacts.ReleaseDecision]
+
+    # =========================================================================
+    # Revision Tracking (prevents infinite loops)
+    # =========================================================================
+    revision_history: list[dict]
+    current_stage: str
+    retry_count: int
+
+    # =========================================================================
+    # Errors & Metadata
+    # =========================================================================
+    errors: list[str]
+    stage_timing: dict[str, float]  # stage -> elapsed seconds
+
+
+# Backward compatibility
+__all__ = ["GraphState", "MCRSState"]

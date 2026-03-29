@@ -31,6 +31,46 @@ pip install artifactforge
 # Generate an artifact
 artifactforge generate rfp "Create an RFP for cloud migration to AWS"
 ```
+
+## Model Configuration
+
+### Environment Variables
+```bash
+# Required: OpenAI-compatible API (OpenRouter, Ollama, etc.)
+OPENAI_API_KEY=sk-...
+
+# Optional: Override base URL (defaults to OpenRouter)
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+```
+
+### Preflight Check
+Every pipeline run automatically checks model availability before execution:
+- Fetches live list of free models from OpenRouter
+- Tests each configured model with a quick request
+- Auto-replaces failed models with the best available alternative
+
+Logs show which models are being used:
+```
+preflight - Running model preflight check...
+preflight - Found 25 free models available
+preflight -   default: z-ai/glm-4.5-air:free (available)
+preflight -   coding: qwen/qwen2.5-coder-7b-instruct (paid, testing OK)
+```
+
+### Default Model Registry
+The gateway uses these models by default:
+| Slot | Model | Type |
+|------|-------|------|
+| default | z-ai/glm-4.5-air:free | Free |
+| reasoning | z-ai/glm-4.5-air:free | Free |
+| deep_reasoning | nvidia/nemotron-3-nano-30b-a3b:free | Free |
+| coding | qwen/qwen2.5-coder-7b-instruct | Paid |
+| review | meta-llama/llama-3.2-3b-instruct | Paid |
+| verification | meta-llama/llama-3.2-3b-instruct | Paid |
+| cheap_worker | z-ai/glm-4.5-air:free | Free |
+
+Override via `MODEL_REGISTRY` in `artifactforge/agents/llm_gateway.py`.
+
 Architecture
 ```
 User Description
