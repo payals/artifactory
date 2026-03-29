@@ -1,5 +1,13 @@
 """Artifact schemas."""
 
-from artifactforge.schemas.simple_report import generate_simple_report
+from artifactforge.schemas.simple_report import (
+    build_simple_report_schema,
+    generate_simple_report,
+    infer_report_kind,
+)
 
-__all__ = ["generate_simple_report"]
+__all__ = [
+    "build_simple_report_schema",
+    "generate_simple_report",
+    "infer_report_kind",
+]

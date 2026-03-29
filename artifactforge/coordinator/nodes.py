@@ -1,41 +1,66 @@
 """LangGraph nodes - tool-powered implementations."""
 
+import logging
 from typing import Any
 
 from artifactforge.coordinator.state import GraphState
-from artifactforge.tools.research.web_searcher import web_searcher
-from artifactforge.tools.research.deep_analyzer import deep_analyzer
-from artifactforge.tools.generic_generator import generic_generator
-from artifactforge.tools.review.generic_reviewer import generic_reviewer
+from artifactforge.schemas.simple_report import build_simple_report_schema
+from artifactforge.tools.research.web_searcher import SearchError, run_web_searcher
+from artifactforge.tools.research.deep_analyzer import run_deep_analyzer
+from artifactforge.tools.research.research_router import research_router
+from artifactforge.tools.generic_generator import run_generic_generator
+from artifactforge.tools.review.generic_reviewer import run_generic_reviewer
+
+logger = logging.getLogger(__name__)
 
 
 def router_node(state: GraphState) -> dict[str, Any]:
     """Route to appropriate workflow based on artifact type."""
     artifact_type = state.get("artifact_type", "simple_report")
+    user_description = state.get("user_description", "")
+
+    if artifact_type == "simple_report":
+        return {"schema": build_simple_report_schema(user_description)}
+
     return {
         "schema": {"type": artifact_type},
     }
 
 
 def research_node(state: GraphState) -> dict[str, Any]:
-    """Research phase - calls WebSearcher and DeepAnalyzer tools."""
+    """Research phase - uses ResearchRouter for intelligent strategy selection."""
     user_description = state.get("user_description", "")
     artifact_type = state.get("artifact_type", "simple_report")
-    search_query = f"{artifact_type} {user_description}"
 
-    search_result = web_searcher(query=search_query, num_results=5)
-    sources = search_result.get("sources", [])
+    strategy = research_router.route(artifact_type, user_description)
+    num_results = strategy.get_num_results()
 
-    if sources:
-        analysis_result = deep_analyzer(sources=sources, query=search_query)
+    all_sources = []
+    all_results = []
+
+    for query in strategy.search_queries:
+        try:
+            search_result = run_web_searcher(query=query, num_results=num_results)
+            sources = search_result.get("sources", [])
+            results = search_result.get("results", [])
+            all_sources.extend(sources)
+            all_results.extend(results)
+        except SearchError as e:
+            logger.warning(f"Search failed for query '{query}': {e}")
+
+    if all_sources:
+        analysis_result = run_deep_analyzer(
+            sources=all_sources[:10], query=user_description
+        )
     else:
         analysis_result = {
-            "analysis": {"key_findings": [], "summary": "No sources found"}
+            "key_findings": [],
+            "summary": "No sources found",
         }
 
     return {
-        "research_output": analysis_result.get("analysis", {}),
-        "research_sources": sources,
+        "research_output": analysis_result,
+        "research_sources": list(set(all_sources)),
     }
 
 
@@ -46,7 +71,7 @@ def generate_node(state: GraphState) -> dict[str, Any]:
     schema = state.get("schema") or {}
     research_output = state.get("research_output") or {}
 
-    result = generic_generator(
+    result = run_generic_generator(
         artifact_type=artifact_type,
         schema=schema,
         context=research_output,
@@ -64,11 +89,13 @@ def review_node(state: GraphState) -> dict[str, Any]:
     artifact_type = state.get("artifact_type", "simple_report")
     artifact_draft = state.get("artifact_draft") or ""
     research_output = state.get("research_output") or {}
+    schema = state.get("schema") or {}
 
-    result = generic_reviewer(
+    result = run_generic_reviewer(
         artifact_type=artifact_type,
         draft=artifact_draft,
         context=research_output,
+        schema=schema,
     )
 
     review_results = [

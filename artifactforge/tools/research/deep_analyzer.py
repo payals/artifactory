@@ -1,6 +1,7 @@
 """Deep analyzer tool - analyzes search results in depth."""
 
 import asyncio
+import logging
 import os
 from typing import Any, List
 
@@ -10,9 +11,20 @@ from pydantic import BaseModel, Field
 
 from artifactforge.config import get_settings
 
+logger = logging.getLogger(__name__)
+
 settings = get_settings()
 OPENAI_API_KEY = settings.openai_api_key or os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = settings.anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")
+
+
+class FetchResult(BaseModel):
+    """Result of fetching a URL."""
+
+    url: str
+    content: str = ""
+    success: bool = True
+    error: str | None = None
 
 
 class DeepAnalyzeInput(BaseModel):
@@ -22,16 +34,29 @@ class DeepAnalyzeInput(BaseModel):
     query: str = Field(description="Original query context")
 
 
-async def _fetch_url_content(url: str) -> str:
-    """Fetch content from a URL."""
+async def _fetch_url_content(url: str) -> FetchResult:
+    """Fetch content from a URL with proper error handling."""
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             response = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
             response.raise_for_status()
             text = response.text
-            return text[:10000]
+            if len(text) < 100:
+                return FetchResult(
+                    url=url, success=False, error="Content too short (<100 chars)"
+                )
+            return FetchResult(url=url, content=text[:10000])
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"HTTP error fetching {url}: {e.response.status_code}")
+        return FetchResult(
+            url=url, success=False, error=f"HTTP {e.response.status_code}"
+        )
+    except httpx.TimeoutException:
+        logger.warning(f"Timeout fetching {url}")
+        return FetchResult(url=url, success=False, error="Request timeout")
     except Exception as e:
-        return f"Error fetching {url}: {e}"
+        logger.warning(f"Error fetching {url}: {e}")
+        return FetchResult(url=url, success=False, error=str(e))
 
 
 async def _analyze_with_llm(
@@ -50,14 +75,15 @@ async def _analyze_with_anthropic(
     sources: List[str], content: str, query: str
 ) -> dict[str, Any]:
     """Analyze using Anthropic API."""
+    headers: dict[str, str] = {
+        "x-api-key": ANTHROPIC_API_KEY or "",
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             json={
                 "model": "claude-3-haiku-20240307",
                 "max_tokens": 1024,
@@ -149,19 +175,40 @@ def deep_analyzer(sources: List[str], query: str) -> dict[str, Any]:
 
     Fetches content from URLs and uses LLM to extract insights.
     """
+    return run_deep_analyzer(sources=sources, query=query)
+
+
+def run_deep_analyzer(sources: List[str], query: str) -> dict[str, Any]:
     import asyncio
 
-    contents = asyncio.run(_fetch_all_sources(sources))
+    fetch_results = asyncio.run(_fetch_all_sources(sources))
+    successful_results = [r for r in fetch_results if r.success]
+    failed_results = [r for r in fetch_results if not r.success]
 
+    if failed_results:
+        logger.warning(
+            f"Failed to fetch {len(failed_results)}/{len(sources)} URLs: "
+            f"{[r.url for r in failed_results]}"
+        )
+
+    if not successful_results:
+        logger.error("All URL fetches failed")
+        return {
+            "key_findings": [],
+            "summary": "Failed to fetch any sources",
+        }
+
+    contents = [r.content for r in successful_results]
+    valid_sources = [r.url for r in successful_results]
     combined = "\n\n---\n\n".join(contents)
 
-    return asyncio.run(_analyze_with_llm(sources, combined, query))
+    return asyncio.run(_analyze_with_llm(valid_sources, combined, query))
 
 
-async def _fetch_all_sources(sources: List[str]) -> List[str]:
+async def _fetch_all_sources(sources: List[str]) -> List[FetchResult]:
     """Fetch all sources concurrently."""
     tasks = [_fetch_url_content(url) for url in sources]
     return await asyncio.gather(*tasks)
 
 
-__all__ = ["deep_analyzer"]
+__all__ = ["deep_analyzer", "run_deep_analyzer"]

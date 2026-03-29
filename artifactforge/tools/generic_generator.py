@@ -9,6 +9,10 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from artifactforge.config import get_settings
+from artifactforge.schemas.simple_report import (
+    build_simple_report_schema,
+    generate_simple_report,
+)
 
 settings = get_settings()
 OPENAI_API_KEY = settings.openai_api_key or os.getenv("OPENAI_API_KEY")
@@ -16,10 +20,10 @@ ANTHROPIC_API_KEY = settings.anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")
 
 
 class GenerateInput(BaseModel):
-    """Input for generic generator."""
-
     artifact_type: str = Field(description="Type of artifact to generate")
-    schema: Dict[str, Any] = Field(description="Artifact schema definition")
+    artifact_schema: Dict[str, Any] = Field(
+        alias="schema", description="Artifact schema definition"
+    )
     context: Dict[str, Any] = Field(description="Research context")
     user_description: str = Field(description="Original user description")
 
@@ -31,6 +35,18 @@ async def _generate_with_llm(
     user_description: str,
 ) -> dict[str, Any]:
     """Generate artifact using LLM."""
+    if artifact_type == "simple_report":
+        active_schema = schema or build_simple_report_schema(user_description, context)
+        return {
+            "artifact_type": artifact_type,
+            "draft": generate_simple_report(user_description, context, active_schema),
+            "metadata": {
+                "confidence": 0.82,
+                "model": "schema-renderer",
+                "requires_review": ["simple-report"],
+            },
+        }
+
     if ANTHROPIC_API_KEY:
         return await _generate_with_anthropic(
             artifact_type, schema, context, user_description
@@ -50,6 +66,8 @@ async def _generate_with_anthropic(
     user_description: str,
 ) -> dict[str, Any]:
     """Generate using Anthropic API."""
+    assert ANTHROPIC_API_KEY is not None
+
     prompt = f"""Generate a {artifact_type} based on the following:
 
 User Request: {user_description}
@@ -98,6 +116,8 @@ async def _generate_with_openai(
     user_description: str,
 ) -> dict[str, Any]:
     """Generate using OpenAI API."""
+    assert OPENAI_API_KEY is not None
+
     prompt = f"""Generate a {artifact_type} based on the following:
 
 User Request: {user_description}
@@ -151,17 +171,12 @@ def _mock_generate(artifact_type: str, user_description: str) -> dict[str, Any]:
     }
 
 
-@tool(args_schema=GenerateInput)
-def generic_generator(
+def run_generic_generator(
     artifact_type: str,
     schema: Dict[str, Any],
     context: Dict[str, Any],
     user_description: str,
 ) -> Dict[str, Any]:
-    """Generate an artifact based on schema and context.
-
-    Uses LLM to generate content based on research findings and schema.
-    """
     import asyncio
 
     return asyncio.run(
@@ -169,4 +184,23 @@ def generic_generator(
     )
 
 
-__all__ = ["generic_generator"]
+@tool(args_schema=GenerateInput)
+def generic_generator(
+    artifact_type: str,
+    artifact_schema: Dict[str, Any],
+    context: Dict[str, Any],
+    user_description: str,
+) -> Dict[str, Any]:
+    """Generate an artifact based on schema and context.
+
+    Uses LLM to generate content based on research findings and schema.
+    """
+    return run_generic_generator(
+        artifact_type=artifact_type,
+        schema=artifact_schema,
+        context=context,
+        user_description=user_description,
+    )
+
+
+__all__ = ["generic_generator", "run_generic_generator"]
