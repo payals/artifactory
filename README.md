@@ -1,6 +1,6 @@
-# artifactory
+# artifactforge
 > Universal AI-powered pipeline for generating any knowledge artifact - self-evolving, observable, customizable
-Generate reports, RFPs, commit reviews, runlists, whitepapers, blog posts, slide decks — or any knowledge artifact — from a simple description. artifactory uses AI that learns from its mistakes and improves over time.
+Generate reports, RFPs, commit reviews, runlists, whitepapers, blog posts, slide decks — or any knowledge artifact — from a simple description. artifactforge uses AI that learns from its mistakes and improves over time.
 ## Features
 ### Universal Artifact Generation
 - **Schema-driven** — Define any artifact type via schema in the database
@@ -29,7 +29,7 @@ docker-compose up -d postgres
 # Install
 pip install artifactforge
 # Generate an artifact
-artifactforge generate rfp "Create an RFP for cloud migration to AWS"
+artifactforge generate "Create an RFP for cloud migration to AWS" --type rfp
 ```
 
 ## Model Configuration
@@ -58,19 +58,16 @@ PERPLEXITY_API_KEY=...
 DATABASE_URL=postgresql://user:pass@localhost:5432/artifactforge
 ```
 
-### Default Model Registry
-The gateway uses these models by default:
-| Slot | Model | Type |
-|------|-------|------|
-| default | z-ai/glm-4.5-air:free | Free |
-| reasoning | z-ai/glm-4.5-air:free | Free |
-| deep_reasoning | nvidia/nemotron-3-nano-30b-a3b:free | Free |
-| coding | qwen/qwen2.5-coder-7b-instruct | Paid |
-| review | meta-llama/llama-3.2-3b-instruct | Paid |
-| verification | meta-llama/llama-3.2-3b-instruct | Paid |
-| cheap_worker | z-ai/glm-4.5-air:free | Free |
+### Model Configuration
+The gateway uses a single model for all agents, configured via environment variables:
 
-Override via `MODEL_REGISTRY` in `artifactforge/agents/llm_gateway.py`.
+```bash
+# Set provider and model in .env
+LLM_PROVIDER=openrouter          # or: anthropic, ollama
+LLM_MODEL=z-ai/glm-4.5-air:free # any model your provider supports
+```
+
+Per-agent temperature tuning is defined in `AGENT_TEMPERATURES` in `artifactforge/agents/llm_gateway.py`.
 
 ## MCRS Pipeline Architecture
 
@@ -174,7 +171,7 @@ SELECT * FROM stage_metrics WHERE trace_id = 'abc-123';
 ```
 
 ## Artifact Types
-artifactory ships with schemas for:
+artifactforge ships with schemas for:
 - RFPs — Request for Proposals with requirements, timeline, budget
 - Blog Posts — SEO-optimized articles with research
 - Commit Reviews — Code review summaries
@@ -182,7 +179,7 @@ artifactory ships with schemas for:
 Add your own — just insert a schema into the database.
 
 Evaluation & Quality Assurance
-artifactory includes built-in evaluation mechanisms to ensure artifact quality:
+artifactforge includes built-in evaluation mechanisms to ensure artifact quality:
 LLM-as-Judge
 - Automated quality assessment using the same LLM that generated the artifact
 - Scores across multiple dimensions: accuracy, coherence, completeness, tone

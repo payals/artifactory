@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     )
     ollama_model: Optional[str] = Field(default=None, description="Ollama model name")
 
+    # Unified LLM configuration (overrides provider-specific defaults)
+    llm_provider: Optional[str] = Field(
+        default=None,
+        description="Force LLM provider: ollama, openai, openrouter, anthropic, mlx",
+    )
+    llm_model: Optional[str] = Field(
+        default=None,
+        description="Default model for all agents (e.g. kimi-k2.5:cloud, gpt-4o, claude-sonnet-4-20250514)",
+    )
+
     def get_openai_base_url(self) -> str:
         """Get the OpenAI-compatible base URL."""
         if self.openai_api_base:

@@ -12,13 +12,25 @@ from typing import Callable, Optional, cast
 from artifactforge.agents.llm_client import (
     Provider,
     call_llm as _call_llm,
-    get_provider,
+    get_provider as _detect_provider,
 )
+from artifactforge.config import get_settings
 from artifactforge.observability.middleware import emit_status, get_trace_id
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_MODEL = "kimi-k2.5:cloud"
+_settings = get_settings()
+
+# LLM_PROVIDER / LLM_MODEL from .env override auto-detection and per-provider defaults
+DEFAULT_PROVIDER: str | None = _settings.llm_provider
+DEFAULT_MODEL: str | None = _settings.llm_model or _settings.ollama_model
+
+
+def get_provider() -> Provider:
+    """Get LLM provider: explicit LLM_PROVIDER from .env, or auto-detect."""
+    if DEFAULT_PROVIDER:
+        return cast(Provider, DEFAULT_PROVIDER)
+    return _detect_provider()
 
 AGENT_TEMPERATURES = {
     "intent_architect": 0.1,
@@ -151,7 +163,7 @@ async def call_llm_async(
     if provider is None:
         provider = get_provider()
     if model is None:
-        model = OLLAMA_MODEL
+        model = DEFAULT_MODEL
 
     provider = cast(Provider, provider)
 
@@ -359,10 +371,13 @@ __all__ = [
     "call_llm_async",
     "call_llm_sync",
     "extract_json",
+    "get_provider",
     "register_callback",
     "get_call_history",
     "get_stats",
     "clear_history",
+    "DEFAULT_MODEL",
+    "DEFAULT_PROVIDER",
     "LLMCall",
     "LLMRequest",
     "LLMResponse",

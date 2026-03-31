@@ -1,16 +1,16 @@
 """Tests for LLM Gateway."""
 
-import pytest
 from artifactforge.agents.llm_gateway import (
     get_agent_temperature,
     AGENT_TEMPERATURES,
-    OLLAMA_MODEL,
+    DEFAULT_MODEL,
 )
 
 
-class TestFixedModel:
-    def test_ollama_model_is_set(self):
-        assert OLLAMA_MODEL == "kimi-k2.5:cloud"
+class TestModelConfig:
+    def test_default_model_is_set(self):
+        """DEFAULT_MODEL should be set from LLM_MODEL or OLLAMA_MODEL in .env."""
+        assert DEFAULT_MODEL is not None
 
 
 class TestAgentTemperatures:

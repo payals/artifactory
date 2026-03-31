@@ -49,11 +49,26 @@ Your job is to design the optimal structure for the audience and output type.
 - Risks/gaps
 - Decision requested
 
+## Visual Elements
+When the user's goal mentions charts, graphs, tables, figures, visuals, or data visualization
+(or when the content contains numeric data, comparisons, or frameworks that benefit from
+visual presentation), you MUST populate visual_elements with concrete specs.
+
+Each visual element should be a dict with:
+- "title": descriptive title (e.g. "Demographic Breakdown")
+- "visual_type": one of "table", "bar_chart", "pie_chart", "line_chart", "flowchart", "comparison_matrix", "swot_grid", "timeline", "heatmap"
+- "section_anchor": which section header this belongs under
+- "data_description": what data to show
+- "purpose": why this visual helps the reader
+
+ALWAYS include visual_elements for reports, whitepapers, and decision memos.
+For blogs and slides, include them when data or comparisons are involved.
+
 ## What NOT to Do
 - Do NOT write content
 - Do NOT ignore output type requirements
 - Do NOT bury key insights
-- Do NOT skip visual elements when helpful
+- Do NOT return empty visual_elements when the content has data, comparisons, or frameworks
 
 ## Output Format
 Return JSON with structure (section headers), section_purposes, narrative_flow, visual_elements, key_takeaways, audience_guidance.
@@ -104,6 +119,7 @@ def _build_strategy_prompt(
             "output_type": brief.get("output_type", "report"),
             "audience": brief.get("audience", "general"),
             "tone": brief.get("tone", "professional"),
+            "user_goal": brief.get("user_goal", ""),
         },
         indent=2,
     )

@@ -1,4 +1,4 @@
-"""MCRS LangGraph - 10-agent multi-agent content reasoning pipeline."""
+"""MCRS LangGraph - 13-node multi-agent content reasoning pipeline."""
 
 from typing import Any, Literal, Optional, cast
 
@@ -554,10 +554,10 @@ def route_after_arbiter(
         _emit_route_decision(
             state,
             "final_arbiter",
-            "end",
-            "No unresolved HIGH or UNSUPPORTED issues remain",
+            "polisher",
+            "No unresolved HIGH or UNSUPPORTED issues remain; proceeding to polish",
         )
-        return "end"
+        return "polisher"
 
     priority_order = [
         "intent_architect",

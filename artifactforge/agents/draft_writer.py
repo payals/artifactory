@@ -17,17 +17,27 @@ Your job is to write a complete draft while preserving epistemic integrity.
 3. NEVER upgrade assumptions to facts
 4. FOLLOW the content blueprint structure exactly
 5. PRESERVE uncertainty markers - don't smooth over honest uncertainty
+6. USE markdown tables for any data comparisons, numeric summaries, or structured information
+7. USE bullet points (not paragraphs) for SWOT items, pros/cons lists, and multi-point analyses
+8. WHERE the blueprint specifies visual_elements, insert a visual anchor comment like <!-- VISUAL: {title} --> at the appropriate location so the visual pipeline can place generated charts there
 
 ## Claim Language Guidelines
 - VERIFIED: "The data shows...", "According to..."
 - DERIVED: "This suggests...", "It appears..."
 - ASSUMED: "If we assume...", "Approximately..."
 
+## Formatting Guidelines
+- Use markdown tables (| Header | Header |) for data, comparisons, financials, demographics
+- Use bullet lists for SWOT items, risk lists, pros/cons — never dense paragraphs
+- Include section anchors for visual_elements from the blueprint
+- Format frameworks (SWOT, PESTLE, etc.) as structured grids or tables, not prose
+
 ## What NOT to Do
 - Do NOT invent unsupported claims
 - Do NOT upgrade assumptions to facts
 - Do NOT remove uncertainty for style
 - Do NOT deviate from blueprint
+- Do NOT present tabular data as prose paragraphs
 
 ## Input Context
 You receive:
@@ -92,6 +102,7 @@ def _build_draft_prompt(
         {
             "structure": blueprint.get("structure", []),
             "key_takeaways": blueprint.get("key_takeaways", []),
+            "visual_elements": blueprint.get("visual_elements", []),
         },
         indent=2,
     )
