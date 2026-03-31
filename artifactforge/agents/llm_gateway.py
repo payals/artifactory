@@ -236,6 +236,33 @@ async def call_llm_async(
     return output
 
 
+def _run_in_thread(coro) -> str:
+    """Run an async coroutine in a separate thread to avoid nested event loops."""
+    import concurrent.futures
+    import threading
+
+    result: str = ""
+    exception: BaseException | None = None
+
+    def _target():
+        nonlocal result, exception
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(coro)
+        except Exception as e:
+            exception = e
+        finally:
+            loop.close()
+
+    thread = threading.Thread(target=_target)
+    thread.start()
+    thread.join()
+    if exception:
+        raise exception
+    return result
+
+
 def call_llm(
     system_prompt: str,
     user_prompt: str,
@@ -245,17 +272,31 @@ def call_llm(
     temperature: float = 0.7,
     max_tokens: int = 32000,
 ) -> str:
-    return asyncio.run(
-        call_llm_async(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            agent_name=agent_name,
-            provider=provider,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
+    try:
+        asyncio.get_running_loop()
+        return _run_in_thread(
+            call_llm_async(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                agent_name=agent_name,
+                provider=provider,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
         )
-    )
+    except RuntimeError:
+        return asyncio.run(
+            call_llm_async(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                agent_name=agent_name,
+                provider=provider,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
 
 
 def call_llm_sync(
@@ -267,17 +308,31 @@ def call_llm_sync(
     temperature: float = 0.7,
     max_tokens: int = 32000,
 ) -> str:
-    return asyncio.run(
-        call_llm_async(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            agent_name=agent_name,
-            provider=provider,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
+    try:
+        asyncio.get_running_loop()
+        return _run_in_thread(
+            call_llm_async(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                agent_name=agent_name,
+                provider=provider,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
         )
-    )
+    except RuntimeError:
+        return asyncio.run(
+            call_llm_async(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                agent_name=agent_name,
+                provider=provider,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
 
 
 __all__ = [
