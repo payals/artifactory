@@ -130,6 +130,17 @@ def _generate_python(spec: dict) -> schemas.VisualGeneration:
 
     code = _build_matplotlib_code(visual_type, data_spec, title, visual_id)
 
+    if not code:
+        return {
+            "visual_id": visual_id,
+            "visual_type": visual_type,
+            "generated_code": None,
+            "svg_output": None,
+            "image_path": None,
+            "generation_method": "python",
+            "notes": "Skipped: insufficient or placeholder data",
+        }
+
     # Execute the generated Python code
     image_path, svg_output, execution_notes = _execute_matplotlib_code(code, visual_id)
 
@@ -144,26 +155,58 @@ def _generate_python(spec: dict) -> schemas.VisualGeneration:
     }
 
 
+def _is_placeholder_data(labels: list, values: list) -> bool:
+    """Detect obviously placeholder data that shouldn't be charted."""
+    if not labels or not values:
+        return True
+    placeholder_labels = [{"a", "b", "c"}, {"x", "y", "z"}, {"1", "2", "3"}]
+    lower_labels = {str(l).lower().strip() for l in labels}
+    if lower_labels in placeholder_labels:
+        return True
+    # Sequential round numbers like [10, 20, 30]
+    if all(isinstance(v, (int, float)) for v in values):
+        if values == list(range(values[0], values[0] + len(values) * 10, 10)):
+            return True
+    return False
+
+
 def _build_matplotlib_code(
     visual_type: str, data_spec: dict, title: str, visual_id: str = "output"
 ) -> str:
     data = data_spec.get("data", {})
     labels = data_spec.get("labels", [])
+    x_label = data_spec.get("x_label", "")
+    y_label = data_spec.get("y_label", "")
 
     if visual_type == "bar_chart":
         values = data.get("values", [])
+        if _is_placeholder_data(labels, values):
+            return ""  # Skip — no meaningful data to chart
         return f"""import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import textwrap
 
 labels = {labels}
 values = {values}
 
+# Wrap long labels
+wrapped = [textwrap.fill(str(l), 18) for l in labels]
+
 fig, ax = plt.subplots(figsize=(10, 6))
-ax.bar(labels, values)
-ax.set_title('{title}')
-ax.set_xlabel('Category')
-ax.set_ylabel('Value')
+bars = ax.bar(wrapped, values, color='#4A90D9', edgecolor='#3570A8', linewidth=0.5)
+ax.set_title('{title}', fontsize=14, fontweight='bold', pad=12)
+if '{x_label}':
+    ax.set_xlabel('{x_label}')
+if '{y_label}':
+    ax.set_ylabel('{y_label}')
+for bar, val in zip(bars, values):
+    label = f'${{val:,.0f}}' if val >= 1000 else f'{{val:,.0f}}'
+    ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+            label if isinstance(val, (int, float)) else str(val),
+            ha='center', va='bottom', fontsize=10)
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
 plt.tight_layout()
 plt.savefig('visual_{visual_id}.png', dpi=150)
 plt.savefig('visual_{visual_id}.svg')
@@ -173,6 +216,8 @@ plt.close()
     elif visual_type == "line_chart":
         x_values = data.get("x", [])
         y_values = data.get("y", [])
+        if not x_values or not y_values:
+            return ""
         return f"""import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -181,11 +226,15 @@ x = {x_values}
 y = {y_values}
 
 fig, ax = plt.subplots(figsize=(10, 6))
-ax.plot(x, y, marker='o')
-ax.set_title('{title}')
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
-ax.grid(True)
+ax.plot(x, y, marker='o', linewidth=2, markersize=8, color='#4A90D9')
+ax.set_title('{title}', fontsize=14, fontweight='bold', pad=12)
+if '{x_label}':
+    ax.set_xlabel('{x_label}')
+if '{y_label}':
+    ax.set_ylabel('{y_label}')
+ax.grid(True, alpha=0.3)
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
 plt.tight_layout()
 plt.savefig('visual_{visual_id}.png', dpi=150)
 plt.savefig('visual_{visual_id}.svg')
@@ -194,6 +243,8 @@ plt.close()
 
     elif visual_type == "pie_chart":
         values = data.get("values", [])
+        if _is_placeholder_data(labels, values):
+            return ""
         return f"""import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -202,8 +253,13 @@ labels = {labels}
 values = {values}
 
 fig, ax = plt.subplots(figsize=(8, 8))
-ax.pie(values, labels=labels, autopct='%1.1f%%')
-ax.set_title('{title}')
+colors = plt.cm.Set2.colors[:len(labels)]
+wedges, texts, autotexts = ax.pie(
+    values, labels=labels, autopct='%1.1f%%',
+    colors=colors, startangle=90, pctdistance=0.75)
+for t in autotexts:
+    t.set_fontsize(10)
+ax.set_title('{title}', fontsize=14, fontweight='bold', pad=12)
 plt.tight_layout()
 plt.savefig('visual_{visual_id}.png', dpi=150)
 plt.savefig('visual_{visual_id}.svg')
@@ -213,6 +269,8 @@ plt.close()
     elif visual_type == "scatter_plot":
         x_values = data.get("x", [])
         y_values = data.get("y", [])
+        if not x_values or not y_values:
+            return ""
         return f"""import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -221,26 +279,22 @@ x = {x_values}
 y = {y_values}
 
 fig, ax = plt.subplots(figsize=(10, 6))
-ax.scatter(x, y, alpha=0.6)
-ax.set_title('{title}')
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
-ax.grid(True)
+ax.scatter(x, y, alpha=0.6, s=80, color='#4A90D9')
+ax.set_title('{title}', fontsize=14, fontweight='bold', pad=12)
+if '{x_label}':
+    ax.set_xlabel('{x_label}')
+if '{y_label}':
+    ax.set_ylabel('{y_label}')
+ax.grid(True, alpha=0.3)
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
 plt.tight_layout()
 plt.savefig('visual_{visual_id}.png', dpi=150)
 plt.savefig('visual_{visual_id}.svg')
 plt.close()
 """
 
-    return f"""import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-fig, ax = plt.subplots()
-ax.set_title('{title}')
-plt.savefig('visual_{visual_id}.png', dpi=150)
-plt.savefig('visual_{visual_id}.svg')
-plt.close()
-"""
+    return ""  # Unknown type — skip rather than produce empty chart
 
 
 def _execute_matplotlib_code(

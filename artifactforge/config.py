@@ -64,6 +64,21 @@ class Settings(BaseSettings):
         description="Default model for all agents (e.g. kimi-k2.5:cloud, gpt-4o, claude-sonnet-4-20250514)",
     )
 
+    # Multi-model routing: per-tier model overrides
+    # When set, agents are routed to the appropriate tier model instead of llm_model.
+    precision_llm_model: Optional[str] = Field(
+        default=None,
+        description="Model for precision tasks: intent parsing, evidence classification, verification, adversarial review",
+    )
+    writing_llm_model: Optional[str] = Field(
+        default=None,
+        description="Model for writing tasks: drafting, polishing, analysis, content strategy",
+    )
+    speed_llm_model: Optional[str] = Field(
+        default=None,
+        description="Model for speed tasks: research planning, arbitration, visual pipeline",
+    )
+
     def get_openai_base_url(self) -> str:
         """Get the OpenAI-compatible base URL."""
         if self.openai_api_base:

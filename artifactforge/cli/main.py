@@ -88,32 +88,133 @@ def _markdown_to_html(content: str) -> str:
         if not lines:
             continue
 
-        if all(re.match(r"^[-*+]\s+", line) for line in lines):
-            items = "".join(
-                f"<li>{_render_inline_markdown(re.sub(r'^[-*+]\s+', '', line))}</li>"
-                for line in lines
-            )
-            rendered.append(f"<ul>{items}</ul>")
+        # Skip HTML comments (<!-- VISUAL: ... --> anchors)
+        if all(re.match(r"^<!--.*-->$", line.strip()) for line in lines):
             continue
 
-        if all(re.match(r"^\d+[.)]\s+", line) for line in lines):
+        # Markdown images: ![alt](path)
+        if len(lines) == 1 and re.match(r"^!\[.*\]\(.*\)$", lines[0].strip()):
+            match = re.match(r"^!\[(.*?)\]\((.*?)\)$", lines[0].strip())
+            if match:
+                alt, src = match.group(1), match.group(2)
+                rendered.append(
+                    f'<figure style="margin: 1em 0; text-align: center;">'
+                    f'<img src="{html.escape(src)}" alt="{html.escape(alt)}" '
+                    f'style="max-width: 100%; height: auto;" />'
+                    f'<figcaption style="font-size: 0.9em; color: #6b7280; margin-top: 0.3em;">'
+                    f'{html.escape(alt)}</figcaption></figure>'
+                )
+                continue
+
+        # Filter out any remaining HTML comment lines from mixed blocks
+        lines = [l for l in lines if not re.match(r"^<!--.*-->$", l.strip())]
+        if not lines:
+            continue
+
+        # Pure unordered list
+        if all(re.match(r"^[\s]*[-*+]\s+", line) for line in lines):
+            rendered.append(_render_list_block(lines))
+            continue
+
+        # Pure ordered list
+        if all(re.match(r"^[\s]*\d+[.)]\s+", line) for line in lines):
             items = "".join(
-                f"<li>{_render_inline_markdown(re.sub(r'^\d+[.)]\s+', '', line))}</li>"
+                f"<li>{_render_inline_markdown(re.sub(r'^[\s]*\d+[.)]\s+', '', line))}</li>"
                 for line in lines
             )
             rendered.append(f"<ol>{items}</ol>")
             continue
 
+        # Heading
         if len(lines) == 1 and (heading := re.match(r"^(#{1,6})\s+(.*)$", lines[0])):
             level = len(heading.group(1))
             text = _render_inline_markdown(heading.group(2))
             rendered.append(f"<h{level}>{text}</h{level}>")
             continue
 
+        # Table (lines starting with |)
+        if all(line.startswith("|") for line in lines):
+            rendered.append(_render_table_block(lines))
+            continue
+
+        # Mixed block: some lines are list items, some are not.
+        # Split into runs of list vs non-list and render each.
+        has_list = any(re.match(r"^[\s]*[-*+]\s+", line) for line in lines)
+        if has_list:
+            rendered.extend(_render_mixed_block(lines))
+            continue
+
         paragraph = " ".join(_render_inline_markdown(line) for line in lines)
         rendered.append(f"<p>{paragraph}</p>")
 
     return "\n".join(rendered)
+
+
+def _render_list_block(lines: list[str]) -> str:
+    """Render a list block, handling nested items (indented lines)."""
+    items: list[str] = []
+    for line in lines:
+        indent = len(line) - len(line.lstrip())
+        text = re.sub(r"^[\s]*[-*+]\s+", "", line)
+        style = ' style="margin-left: 1.2em;"' if indent >= 4 else ""
+        items.append(f"<li{style}>{_render_inline_markdown(text)}</li>")
+    return f"<ul>{''.join(items)}</ul>"
+
+
+def _render_table_block(lines: list[str]) -> str:
+    """Render a markdown table as HTML."""
+    rows: list[list[str]] = []
+    separator_idx = -1
+    for i, line in enumerate(lines):
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if all(re.match(r"^[-:]+$", c) for c in cells):
+            separator_idx = i
+            continue
+        rows.append(cells)
+
+    if not rows:
+        return ""
+
+    html_parts = ["<table style='border-collapse: collapse; width: 100%; margin: 0.75em 0;'>"]
+    for i, row in enumerate(rows):
+        tag = "th" if i == 0 and separator_idx == 1 else "td"
+        style = "border: 1px solid #d1d5db; padding: 0.4em 0.7em;"
+        if tag == "th":
+            style += " background: #f3f4f6; font-weight: bold;"
+        cells_html = "".join(f"<{tag} style='{style}'>{_render_inline_markdown(c)}</{tag}>" for c in row)
+        html_parts.append(f"<tr>{cells_html}</tr>")
+    html_parts.append("</table>")
+    return "\n".join(html_parts)
+
+
+def _render_mixed_block(lines: list[str]) -> list[str]:
+    """Split a block with mixed paragraphs and list items into separate elements."""
+    result: list[str] = []
+    current_para: list[str] = []
+    current_list: list[str] = []
+
+    def flush_para():
+        if current_para:
+            text = " ".join(_render_inline_markdown(l) for l in current_para)
+            result.append(f"<p>{text}</p>")
+            current_para.clear()
+
+    def flush_list():
+        if current_list:
+            result.append(_render_list_block(current_list))
+            current_list.clear()
+
+    for line in lines:
+        if re.match(r"^[\s]*[-*+]\s+", line):
+            flush_para()
+            current_list.append(line)
+        else:
+            flush_list()
+            current_para.append(line)
+
+    flush_para()
+    flush_list()
+    return result
 
 
 def _build_styled_html_document(content: str) -> str:

@@ -9,46 +9,55 @@ from artifactforge.agents.visual_generator import (
 class TestBuildMatplotlibCode:
     def test_bar_chart_code(self):
         data_spec = {
+            "data": {"values": [3231, 52821]},
+            "labels": ["Population", "Median Income ($)"],
+            "x_label": "Metric",
+            "y_label": "Value",
+        }
+        code = _build_matplotlib_code("bar_chart", data_spec, "Demographics", "V001")
+        assert "bar" in code
+        assert "3231" in code
+        assert "Demographics" in code
+        assert "visual_V001" in code
+
+    def test_bar_chart_rejects_placeholder(self):
+        data_spec = {
             "data": {"values": [10, 20, 30]},
             "labels": ["A", "B", "C"],
         }
-        code = _build_matplotlib_code("bar_chart", data_spec, "Test Chart", "V001")
-        assert "bar" in code
-        assert "10" in code
-        assert "Test Chart" in code
-        assert "visual_V001" in code
+        code = _build_matplotlib_code("bar_chart", data_spec, "Test", "V000")
+        assert code == ""
 
     def test_line_chart_code(self):
         data_spec = {
-            "data": {"x": [1, 2, 3], "y": [4, 5, 6]},
+            "data": {"x": [2020, 2021, 2022], "y": [3100, 3200, 3231]},
             "labels": [],
         }
-        code = _build_matplotlib_code("line_chart", data_spec, "Line", "V002")
+        code = _build_matplotlib_code("line_chart", data_spec, "Population Trend", "V002")
         assert "plot" in code
         assert "marker='o'" in code
 
     def test_pie_chart_code(self):
         data_spec = {
-            "data": {"values": [25, 50, 25]},
-            "labels": ["A", "B", "C"],
+            "data": {"values": [35, 35, 20, 10]},
+            "labels": ["Seafood", "American", "Pizza", "Other"],
         }
-        code = _build_matplotlib_code("pie_chart", data_spec, "Pie", "V003")
+        code = _build_matplotlib_code("pie_chart", data_spec, "Restaurant Mix", "V003")
         assert "pie" in code
         assert "autopct" in code
 
     def test_scatter_plot_code(self):
         data_spec = {
-            "data": {"x": [1, 2], "y": [3, 4]},
+            "data": {"x": [50, 75], "y": [3000, 4500]},
             "labels": [],
         }
-        code = _build_matplotlib_code("scatter_plot", data_spec, "Scatter", "V004")
+        code = _build_matplotlib_code("scatter_plot", data_spec, "Income vs Visits", "V004")
         assert "scatter" in code
         assert "alpha=0.6" in code
 
-    def test_unknown_type_fallback(self):
+    def test_unknown_type_returns_empty(self):
         code = _build_matplotlib_code("unknown_type", {}, "Fallback", "V005")
-        assert "subplots" in code
-        assert "Fallback" in code
+        assert code == ""
 
 
 class TestGenerateMermaid:
@@ -104,10 +113,10 @@ class TestGeneratePython:
         spec = {
             "visual_id": "V001",
             "visual_type": "bar_chart",
-            "title": "Sales",
+            "title": "Demographics",
             "data_spec": {
-                "data": {"values": [10, 20, 30]},
-                "labels": ["A", "B", "C"],
+                "data": {"values": [3231, 52821]},
+                "labels": ["Population", "Median Income ($)"],
             },
         }
         result = _generate_python(spec)
@@ -116,6 +125,20 @@ class TestGeneratePython:
         assert result["generation_method"] == "python"
         assert result["generated_code"] is not None
         assert "bar" in result["generated_code"]
+
+    def test_skips_placeholder_data(self):
+        spec = {
+            "visual_id": "V099",
+            "visual_type": "bar_chart",
+            "title": "Fake",
+            "data_spec": {
+                "data": {"values": [10, 20, 30]},
+                "labels": ["A", "B", "C"],
+            },
+        }
+        result = _generate_python(spec)
+        assert result["generated_code"] is None
+        assert "placeholder" in result["notes"].lower()
 
 
 class TestRunVisualGenerator:

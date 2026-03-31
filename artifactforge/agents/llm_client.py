@@ -195,9 +195,7 @@ async def _call_ollama(
     temperature: float,
     max_tokens: int,
 ) -> str:
-    ollama_model = (
-        OLLAMA_MODEL if model in ("ollama", "kimi-k2.5:cloud", OLLAMA_MODEL) else model
-    )
+    ollama_model = model if model and model != "ollama" else OLLAMA_MODEL
     async with httpx.AsyncClient(timeout=600.0) as client:
         response = await client.post(
             f"{OLLAMA_BASE_URL}/api/chat",

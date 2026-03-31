@@ -43,9 +43,14 @@ Return a JSON array of visual specs, each with:
 - visual_type: One of the types above
 - title: Clear title for the visual
 - description: What this visual shows
-- data_spec: The data to visualize (can include placeholder values)
+- data_spec: The actual data extracted from the document. For COMPLEX types, include:
+  - "labels": array of category/axis labels from the document (e.g. ["Local Residents", "Tourists", "Seasonal Workers"])
+  - "data": object with "values" (for bar/pie), "x" and "y" (for line/scatter) — use real numbers from the document
+  - "x_label": axis label
+  - "y_label": axis label
+  IMPORTANT: Extract real data points, numbers, and categories from the document. NEVER use placeholder values like A/B/C or 10/20/30. If the document contains specific figures (populations, costs, percentages), use those exact values.
 - complexity: "SIMPLE" or "COMPLEX"
-- mermaid_code: If SIMPLE, provide Mermaid code
+- mermaid_code: If SIMPLE, provide complete Mermaid code
 - placeholder_position: Where in the section to insert
 
 If no visuals are needed, return an empty array []."""

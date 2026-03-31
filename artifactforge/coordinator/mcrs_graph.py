@@ -1,5 +1,6 @@
 """MCRS LangGraph - 13-node multi-agent content reasoning pipeline."""
 
+from pathlib import Path
 from typing import Any, Literal, Optional, cast
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -411,6 +412,10 @@ def _embed_visuals_in_content(
 ) -> str:
     """Insert visual image references into markdown content.
 
+    Matches generated visuals to either:
+    1. <!-- VISUAL: title --> comment anchors (replaced with image)
+    2. Section headers matching section_anchor (image inserted after header)
+
     Args:
         content: The polished draft content
         generated_visuals: Generated visuals with image_path
@@ -422,20 +427,73 @@ def _embed_visuals_in_content(
     if not generated_visuals:
         return content
 
+    import re as _re
+
     spec_map = {s.get("visual_id"): s for s in specs}
+
+    # Build lookup from visual title/section_anchor to image markdown
+    visual_images: list[tuple[str, str, str]] = []  # (title, section_anchor, md)
+    for vis in generated_visuals:
+        image_path = vis.get("image_path")
+        if not image_path:
+            continue
+        # Use absolute path so PDF renderers (weasyprint, pandoc) can find the file
+        abs_path = str(Path(image_path).resolve())
+        spec = spec_map.get(vis.get("visual_id"), {})
+        title = spec.get("title", vis.get("visual_id", "Visual"))
+        anchor = spec.get("section_anchor", "")
+        img_md = f"\n![{title}]({abs_path})\n"
+        visual_images.append((title, anchor, img_md))
+
+    if not visual_images:
+        return content
+
     lines = content.split("\n")
     output_lines = []
+    used_ids: set[int] = set()
 
     for line in lines:
+        stripped = line.strip()
+
+        # Check if this line is a <!-- VISUAL: ... --> comment
+        comment_match = _re.match(r"^<!--\s*VISUAL:\s*(.+?)\s*-->$", stripped)
+        if comment_match:
+            comment_title = comment_match.group(1).lower()
+            # Find best matching visual by title similarity
+            best_idx = None
+            best_score = 0
+            for idx, (title, _anchor, _img_md) in enumerate(visual_images):
+                if idx in used_ids:
+                    continue
+                # Check if titles share significant words
+                title_words = set(title.lower().split())
+                comment_words = set(comment_title.split())
+                overlap = len(title_words & comment_words)
+                if overlap > best_score:
+                    best_score = overlap
+                    best_idx = idx
+            if best_idx is not None and best_score >= 1:
+                used_ids.add(best_idx)
+                output_lines.append(visual_images[best_idx][2])
+                continue
+            # No match — drop the comment anchor
+            continue
+
         output_lines.append(line)
-        for vis in generated_visuals:
-            spec = spec_map.get(vis.get("visual_id"), {})
-            section_anchor = spec.get("section_anchor", "")
-            if section_anchor and line.strip() == section_anchor:
-                image_path = vis.get("image_path")
-                title = spec.get("title", vis.get("visual_id", "Visual"))
-                if image_path:
-                    output_lines.append(f"\n![{title}]({image_path})\n")
+
+        # Also try section_anchor matching for visuals not yet placed
+        header_match = _re.match(r"^#{1,6}\s+(.*)$", stripped)
+        if header_match:
+            header_text = header_match.group(1).strip()
+            for idx, (title, anchor, img_md) in enumerate(visual_images):
+                if idx in used_ids:
+                    continue
+                if anchor and (
+                    header_text.lower() == anchor.lower()
+                    or anchor.lower() in header_text.lower()
+                ):
+                    used_ids.add(idx)
+                    output_lines.append(img_md)
 
     return "\n".join(output_lines)
 
@@ -443,6 +501,12 @@ def _embed_visuals_in_content(
 @trace_node("visual_generator")
 def visual_generator_node(state: MCRSState) -> dict[str, Any]:
     from artifactforge.agents import run_visual_generator
+
+    # Clean stale visuals from previous runs
+    visuals_dir = Path("outputs/visuals")
+    if visuals_dir.exists():
+        for old_file in visuals_dir.glob("visual_V*"):
+            old_file.unlink()
 
     specs = state.get("visual_specs", [])
     reviews = state.get("visual_reviews", [])

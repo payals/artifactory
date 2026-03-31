@@ -25,6 +25,44 @@ _settings = get_settings()
 DEFAULT_PROVIDER: str | None = _settings.llm_provider
 DEFAULT_MODEL: str | None = _settings.llm_model or _settings.ollama_model
 
+# Multi-model routing: per-tier model overrides from .env
+TIER_MODELS: dict[str, str | None] = {
+    "precision": _settings.precision_llm_model,
+    "writing": _settings.writing_llm_model,
+    "speed": _settings.speed_llm_model,
+}
+
+# Maps each agent to a model tier. When the tier's model is configured in .env,
+# the agent uses that model instead of DEFAULT_MODEL.
+AGENT_MODEL_ROUTES: dict[str, str] = {
+    # Precision tier — structured reasoning, low hallucination, factual accuracy
+    "intent_architect": "precision",
+    "evidence_ledger": "precision",
+    "adversarial_reviewer": "precision",
+    "verifier": "precision",
+    # Writing tier — prose quality, creative generation, analytical depth
+    "output_strategist": "writing",
+    "draft_writer": "writing",
+    "analyst": "writing",
+    "polisher": "writing",
+    # Speed tier — fast structured tasks, visual pipeline, routing decisions
+    "research_lead": "speed",
+    "final_arbiter": "speed",
+    "visual_designer": "speed",
+    "visual_reviewer": "speed",
+    "visual_generator": "speed",
+}
+
+
+def get_agent_model(agent_name: str | None) -> str | None:
+    """Resolve model for an agent: tier override → DEFAULT_MODEL fallback."""
+    if agent_name and agent_name in AGENT_MODEL_ROUTES:
+        tier = AGENT_MODEL_ROUTES[agent_name]
+        tier_model = TIER_MODELS.get(tier)
+        if tier_model:
+            return tier_model
+    return DEFAULT_MODEL
+
 
 def get_provider() -> Provider:
     """Get LLM provider: explicit LLM_PROVIDER from .env, or auto-detect."""
@@ -163,7 +201,7 @@ async def call_llm_async(
     if provider is None:
         provider = get_provider()
     if model is None:
-        model = DEFAULT_MODEL
+        model = get_agent_model(agent_name)
 
     provider = cast(Provider, provider)
 
