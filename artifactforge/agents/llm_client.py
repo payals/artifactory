@@ -20,7 +20,7 @@ MLX_MODEL_PATH = os.getenv(
 )
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:35b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "kimi-k2.5:cloud")
 
 
 Provider = Literal["openai", "anthropic", "mock", "openrouter", "mlx", "ollama"]
@@ -32,7 +32,9 @@ def get_provider() -> Provider:
     if MLX_SERVER_URL and MLX_SERVER_URL.strip():
         return "mlx"
     if OPENAI_API_KEY:
-        return "openrouter"
+        if "openrouter.ai" in OPENAI_API_BASE:
+            return "openrouter"
+        return "openai"
     if ANTHROPIC_API_KEY:
         return "anthropic"
     return "mock"
@@ -194,7 +196,7 @@ async def _call_ollama(
     max_tokens: int,
 ) -> str:
     ollama_model = (
-        OLLAMA_MODEL if model in ("ollama", "qwen3.5:35b", OLLAMA_MODEL) else model
+        OLLAMA_MODEL if model in ("ollama", "kimi-k2.5:cloud", OLLAMA_MODEL) else model
     )
     async with httpx.AsyncClient(timeout=600.0) as client:
         response = await client.post(

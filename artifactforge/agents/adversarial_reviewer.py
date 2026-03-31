@@ -55,6 +55,19 @@ Return JSON with:
 - passed: boolean (true if no HIGH severity issues)
 """
 
+PROBLEM_TYPE_DEFAULT_LOCUS: dict[str, str] = {
+    "missing_dimension": "research_lead",
+    "unsupported_claim": "evidence_ledger",
+    "shallow_analysis": "analyst",
+    "overconfidence": "evidence_ledger",
+    "weak_recommendation": "analyst",
+    "audience_mismatch": "output_strategist",
+    "poor_structure": "output_strategist",
+    "misleading_framing": "intent_architect",
+    "unaddressed_risk": "analyst",
+    "unexamined_assumption": "evidence_ledger",
+}
+
 
 @agent_contract(ADVERSARIAL_REVIEWER_CONTRACT)
 def run_adversarial_reviewer(
@@ -94,7 +107,9 @@ def run_adversarial_reviewer(
                 not issue.get("repair_locus")
                 or issue.get("repair_locus") not in valid_loci
             ):
-                issue["repair_locus"] = "draft_writer"
+                issue["repair_locus"] = PROBLEM_TYPE_DEFAULT_LOCUS.get(
+                    issue.get("problem_type", ""), "draft_writer"
+                )
 
         typed_issues = [schemas.RedTeamIssue(**i) for i in issues]
         return schemas.RedTeamReview(

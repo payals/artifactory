@@ -1,6 +1,7 @@
 """Observability middleware for LangGraph nodes."""
 
 import asyncio
+import contextvars
 import functools
 import threading
 import time
@@ -14,8 +15,12 @@ from artifactforge.observability.events import get_event_emitter
 
 logger = structlog.get_logger(__name__)
 
-TRACE_ID_CTX: Optional[str] = None
-_LLM_STATS_BEFORE: dict = {}
+TRACE_ID_CTX: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "TRACE_ID_CTX", default=None
+)
+_LLM_STATS_BEFORE: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "_LLM_STATS_BEFORE", default=None
+)
 
 STATUS_UPDATE_INTERVAL = 5.0
 
@@ -64,26 +69,25 @@ def _start_heartbeat(
 
 def get_trace_id() -> str:
     """Get or create trace ID for current execution."""
-    global TRACE_ID_CTX
-    if TRACE_ID_CTX is None:
-        TRACE_ID_CTX = str(uuid.uuid4())
-    return TRACE_ID_CTX
+    trace_id = TRACE_ID_CTX.get()
+    if trace_id is None:
+        trace_id = str(uuid.uuid4())
+        TRACE_ID_CTX.set(trace_id)
+    return trace_id
 
 
 def set_trace_id(trace_id: str) -> None:
     """Set trace ID for current execution."""
-    global TRACE_ID_CTX
-    TRACE_ID_CTX = trace_id
+    TRACE_ID_CTX.set(trace_id)
 
 
 def _capture_llm_stats(node_name: str) -> dict:
     """Capture LLM stats for a node."""
     try:
-        from artifactforge.agents.llm_gateway import get_stats, clear_history
+        from artifactforge.agents.llm_gateway import get_stats
 
-        global _LLM_STATS_BEFORE
-
-        stats_before = _LLM_STATS_BEFORE.get(
+        stats_store = _LLM_STATS_BEFORE.get() or {}
+        stats_before = stats_store.get(
             node_name, {"total_calls": 0, "total_cost_usd": 0.0}
         )
         current_stats = get_stats()
@@ -91,7 +95,8 @@ def _capture_llm_stats(node_name: str) -> dict:
         delta_calls = current_stats["total_calls"] - stats_before["total_calls"]
         delta_cost = current_stats["total_cost_usd"] - stats_before["total_cost_usd"]
 
-        _LLM_STATS_BEFORE[node_name] = current_stats
+        stats_store[node_name] = current_stats
+        _LLM_STATS_BEFORE.set(stats_store)
 
         return {
             "llm_calls": delta_calls,
@@ -106,8 +111,9 @@ def _record_llm_stats(node_name: str) -> None:
     try:
         from artifactforge.agents.llm_gateway import get_stats
 
-        global _LLM_STATS_BEFORE
-        _LLM_STATS_BEFORE[node_name] = get_stats()
+        stats_store = _LLM_STATS_BEFORE.get() or {}
+        stats_store[node_name] = get_stats()
+        _LLM_STATS_BEFORE.set(stats_store)
     except Exception:
         pass
 

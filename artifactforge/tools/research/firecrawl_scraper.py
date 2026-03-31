@@ -199,9 +199,6 @@ def firecrawl_scraper(
     result = run_firecrawl_scraper(
         url=url, formats=formats, only_main_content=only_main_content
     )
-    result = run_firecrawl_scraper(
-        url=url, formats=formats, only_main_content=only_main_content
-    )
     emit_status(
         f"Scrape complete for {url[:60]}...",
         trace_id=get_trace_id(),
