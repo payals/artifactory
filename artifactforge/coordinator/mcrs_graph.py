@@ -11,7 +11,6 @@ from artifactforge.observability.middleware import trace_node
 
 
 MAX_REVISIONS = 3
-MAX_RETRIES = 2
 RepairLocus = Literal[
     "intent_architect",
     "research_lead",
@@ -20,6 +19,7 @@ RepairLocus = Literal[
     "output_strategist",
     "draft_writer",
     "polisher",
+    "visual_designer",
 ]
 
 
@@ -147,11 +147,20 @@ def create_mcrs_app(checkpointer: Optional[Any] = None) -> Any:
             "output_strategist": "output_strategist",
             "draft_writer": "draft_writer",
             "polisher": "polisher",
+            "visual_designer": "visual_designer",
             "end": END,
         },
     )
 
-    graph.add_edge("polisher", "visual_designer")
+    graph.add_conditional_edges(
+        "polisher",
+        route_after_polisher,
+        {
+            "adversarial_reviewer": "adversarial_reviewer",
+            "visual_designer": "visual_designer",
+            "end": END,
+        },
+    )
     graph.add_edge("visual_designer", "visual_reviewer")
     graph.add_edge("visual_reviewer", "visual_generator")
     graph.add_edge("visual_generator", END)
@@ -267,7 +276,6 @@ def draft_writer_node(state: MCRSState) -> dict[str, Any]:
     )
     return {
         "draft_v1": result,
-        "draft_version": state.get("draft_version", 1),
         "repair_context": repair_context,
         "revision_history": state.get("revision_history", [])
         + [
@@ -307,6 +315,8 @@ def verifier_node(state: MCRSState) -> dict[str, Any]:
 
 @trace_node("polisher")
 def polisher_node(state: MCRSState) -> dict[str, Any]:
+    from datetime import datetime
+
     from artifactforge.agents import run_polisher
 
     output_type = _execution_brief(state).get("output_type", "report")
@@ -316,7 +326,23 @@ def polisher_node(state: MCRSState) -> dict[str, Any]:
         output_type=output_type,
         repair_context=repair_context,
     )
-    return {"polished_draft": result, "repair_context": repair_context}
+    updates: dict[str, Any] = {"polished_draft": result, "repair_context": repair_context}
+    if repair_context:
+        revision_count = len(state.get("revision_history", []))
+        updates["draft_v1"] = result
+        updates["revision_history"] = state.get("revision_history", []) + [
+            {
+                "version": revision_count + 1,
+                "trigger": "polisher_repair",
+                "changes_made": f"Polish repair from {repair_context.get('source_node', 'unknown')}",
+                "issues_addressed": [
+                    issue.get("issue_id", "")
+                    for issue in repair_context.get("review_issues", [])
+                ],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        ]
+    return updates
 
 
 @trace_node("final_arbiter")
@@ -445,6 +471,40 @@ def route_after_review(state: MCRSState) -> Literal["revise", "verify"]:
     return "verify"
 
 
+def route_after_polisher(
+    state: MCRSState,
+) -> Literal["adversarial_reviewer", "visual_designer", "end"]:
+    """Route polisher output based on whether it was invoked as repair."""
+    repair_context = state.get("repair_context")
+    if repair_context:
+        _emit_route_decision(
+            state,
+            "polisher",
+            "adversarial_reviewer",
+            "Polisher ran as repair; re-verifying polished content",
+        )
+        return "adversarial_reviewer"
+
+    blueprint = cast(dict[str, Any], state.get("content_blueprint") or {})
+    visual_elements = blueprint.get("visual_elements", [])
+    if visual_elements:
+        _emit_route_decision(
+            state,
+            "polisher",
+            "visual_designer",
+            "Normal polisher flow; visual elements requested",
+        )
+        return "visual_designer"
+
+    _emit_route_decision(
+        state,
+        "polisher",
+        "end",
+        "Normal polisher flow; no visual elements requested",
+    )
+    return "end"
+
+
 def route_after_arbiter(
     state: MCRSState,
 ) -> Literal[
@@ -455,6 +515,7 @@ def route_after_arbiter(
     "output_strategist",
     "draft_writer",
     "polisher",
+    "visual_designer",
     "end",
 ]:
     decision = cast(dict[str, Any], state.get("release_decision") or {})
@@ -466,7 +527,7 @@ def route_after_arbiter(
             state,
             "final_arbiter",
             "polisher",
-            "Release decision marked READY",
+            "Release marked READY; proceeding to polish",
         )
         return "polisher"
 
@@ -506,6 +567,7 @@ def route_after_arbiter(
         "output_strategist",
         "draft_writer",
         "polisher",
+        "visual_designer",
     ]
 
     for locus in priority_order:
@@ -532,4 +594,4 @@ def route_after_arbiter(
 
 mcrs_app = create_mcrs_app()
 
-__all__ = ["create_mcrs_app", "mcrs_app", "MAX_REVISIONS", "MAX_RETRIES"]
+__all__ = ["create_mcrs_app", "mcrs_app", "MAX_REVISIONS"]

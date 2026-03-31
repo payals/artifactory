@@ -228,6 +228,9 @@ __marimo__/
 # Napkin (persistent mistake memory)
 napkin.md
 
+# Code quality analysis (working doc, not source)
+code_quality-analysis.md
+
 # Output artifacts
 outputs/**/*.md
 outputs/**/*.pdf

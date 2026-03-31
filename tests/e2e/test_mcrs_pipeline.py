@@ -7,24 +7,15 @@ Skips external research tools to focus on core agent flow.
 
 import pytest
 from typing import Any, Generator
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import uuid
 
 from artifactforge.coordinator.mcrs_graph import create_mcrs_app
 from artifactforge.coordinator.state import MCRSState
-from artifactforge.observability.events import EventType, get_event_emitter
+from artifactforge.observability.events import get_event_emitter
 from artifactforge.agents.llm_gateway import clear_history
 
-from tests.e2e.fixtures import (
-    ContractValidator,
-    MINIMAL_EXECUTION_BRIEF,
-    MINIMAL_CLAIM_LEDGER,
-    MINIMAL_ANALYTICAL_BACKBONE,
-    MINIMAL_CONTENT_BLUEPRINT,
-    MINIMAL_RED_TEAM_REVIEW,
-    MINIMAL_VERIFICATION_REPORT,
-    MINIMAL_RELEASE_DECISION_READY,
-)
+from tests.e2e.fixtures import ContractValidator
 
 
 # =============================================================================
@@ -126,14 +117,12 @@ class TestMCRSPipeline:
             "analytical_backbone": None,
             "content_blueprint": None,
             "draft_v1": None,
-            "draft_version": 1,
             "red_team_review": None,
             "verification_report": None,
             "polished_draft": None,
             "release_decision": None,
             "revision_history": [],
             "current_stage": "",
-            "retry_count": 0,
             "errors": [],
             "stage_timing": {},
             "tokens_used": {},
@@ -272,14 +261,12 @@ class TestMCRSPipeline:
             "analytical_backbone": None,
             "content_blueprint": None,
             "draft_v1": None,
-            "draft_version": 1,
             "red_team_review": None,
             "verification_report": None,
             "polished_draft": None,
             "release_decision": None,
             "revision_history": [],
             "current_stage": "",
-            "retry_count": 0,
             "errors": [],
             "stage_timing": {},
             "tokens_used": {},
@@ -381,14 +368,12 @@ class TestMCRSEdgeCases:
             "analytical_backbone": None,
             "content_blueprint": None,
             "draft_v1": None,
-            "draft_version": 1,
             "red_team_review": None,
             "verification_report": None,
             "polished_draft": None,
             "release_decision": None,
             "revision_history": [],
             "current_stage": "",
-            "retry_count": 0,
             "errors": [],
             "stage_timing": {},
             "tokens_used": {},
@@ -439,14 +424,12 @@ class TestMCRSQualityGates:
             "analytical_backbone": None,
             "content_blueprint": None,
             "draft_v1": None,
-            "draft_version": 1,
             "red_team_review": None,
             "verification_report": None,
             "polished_draft": None,
             "release_decision": None,
             "revision_history": [],
             "current_stage": "",
-            "retry_count": 0,
             "errors": [],
             "stage_timing": {},
             "tokens_used": {},
@@ -463,42 +446,264 @@ class TestMCRSQualityGates:
         config = {"configurable": {"thread_id": "test-thread"}}
         result = app.invoke(initial_state, config=config)
 
+        import re
+
         # Get final artifact
         final_artifact = result.get("final_with_visuals") or result.get(
             "polished_draft", ""
         )
 
-        # Quality gate 1: Artifact exists and has content
+        # Quality gate 1: Artifact exists and has substantial content
         assert final_artifact, "Final artifact is empty"
-        assert len(final_artifact) > 100, "Final artifact too short"
-
-        # Quality gate 2: Contains expected content
-        assert "Python" in final_artifact or "python" in final_artifact.lower(), (
-            "Artifact missing topic (Python)"
+        assert len(final_artifact) > 200, (
+            f"Final artifact too short ({len(final_artifact)} chars)"
         )
 
-        # Quality gate 3: Release decision exists
+        # Quality gate 2: Contains topic-relevant content
+        assert "python" in final_artifact.lower(), "Artifact missing topic (Python)"
+
+        # Quality gate 3: Structural validation — has markdown headings
+        headings = re.findall(r"^#{1,3}\s+.+", final_artifact, re.MULTILINE)
+        assert len(headings) >= 2, (
+            f"Artifact lacks structure: only {len(headings)} headings found"
+        )
+
+        # Quality gate 4: Has multiple paragraphs (not just bullet points)
+        paragraphs = [
+            p.strip()
+            for p in final_artifact.split("\n\n")
+            if p.strip() and not p.strip().startswith("-")
+        ]
+        assert len(paragraphs) >= 2, (
+            f"Artifact lacks depth: only {len(paragraphs)} paragraphs"
+        )
+
+        # Quality gate 5: Release decision is valid
         decision = result.get("release_decision")
         assert decision is not None, "No release decision"
+        assert decision.get("status") in ("READY", "NOT_READY"), (
+            f"Invalid release status: {decision.get('status')}"
+        )
+        assert isinstance(decision.get("confidence"), (int, float)), (
+            "Release decision missing numeric confidence"
+        )
 
-        # Quality gate 4: All verification passed
+        # Quality gate 6: Verification report actually evaluated claims
         verification = result.get("verification_report")
-        if verification:
-            assert verification.get("passed") is not None, (
-                "Verification missing passed field"
-            )
+        assert verification is not None, "No verification report"
+        assert "passed" in verification, "Verification missing passed field"
+        items = verification.get("items", [])
+        assert len(items) > 0, (
+            "Verification report has no items — verifier did not evaluate any claims"
+        )
 
-        # Quality gate 5: No critical issues in review
+        # Quality gate 7: Red team review actually evaluated the draft
         review = result.get("red_team_review", {})
-        high_severity = [
-            i for i in review.get("issues", []) if i.get("severity") == "HIGH"
-        ]
+        assert "passed" in review, "Red team review missing passed field"
+        assert "overall_assessment" in review, "Red team review missing assessment"
+        assert len(review.get("overall_assessment", "")) > 10, (
+            "Red team assessment is too brief to be meaningful"
+        )
 
-        # If release is READY, there should be no high severity issues
+        # Quality gate 8: If READY, no HIGH severity issues remain
         if decision.get("status") == "READY":
+            high_severity = [
+                i for i in review.get("issues", []) if i.get("severity") == "HIGH"
+            ]
             assert len(high_severity) == 0, (
                 f"Released with HIGH severity issues: {high_severity}"
             )
+
+    def test_intermediate_artifacts_have_depth(
+        self,
+        event_collector: Any,
+        mock_research_tools: None,
+        minimal_prompt: str,
+    ) -> None:
+        """Verify intermediate artifacts are substantive, not stub-like."""
+        app = create_mcrs_app()
+
+        initial_state: MCRSState = {
+            "user_prompt": minimal_prompt,
+            "conversation_context": None,
+            "output_constraints": None,
+            "intent_mode": "auto",
+            "answers_collected": {},
+            "execution_brief": None,
+            "research_map": None,
+            "claim_ledger": None,
+            "analytical_backbone": None,
+            "content_blueprint": None,
+            "draft_v1": None,
+            "red_team_review": None,
+            "verification_report": None,
+            "polished_draft": None,
+            "release_decision": None,
+            "revision_history": [],
+            "current_stage": "",
+            "errors": [],
+            "stage_timing": {},
+            "tokens_used": {},
+            "costs": {},
+            "stage_metadata": {},
+            "trace_id": str(uuid.uuid4()),
+            "repair_context": None,
+            "visual_specs": [],
+            "visual_reviews": [],
+            "generated_visuals": [],
+            "final_with_visuals": None,
+        }
+
+        config = {"configurable": {"thread_id": "test-thread"}}
+        result = app.invoke(initial_state, config=config)
+
+        # Claim ledger has actual claims
+        claim_ledger = result.get("claim_ledger", {})
+        claims = claim_ledger.get("claims", [])
+        assert len(claims) >= 2, f"Claim ledger too sparse: {len(claims)} claims"
+        for claim in claims:
+            assert claim.get("claim_text"), "Claim has empty text"
+            assert claim.get("classification") in (
+                "VERIFIED",
+                "DERIVED",
+                "ASSUMED",
+                "SPECULATIVE",
+            ), f"Invalid classification: {claim.get('classification')}"
+            assert isinstance(claim.get("confidence"), (int, float)), (
+                "Claim missing numeric confidence"
+            )
+
+        # Analytical backbone has findings
+        backbone = result.get("analytical_backbone", {})
+        assert len(backbone.get("key_findings", [])) >= 1, "No key findings"
+        assert len(backbone.get("risks", [])) >= 1, "No risks identified"
+
+        # Content blueprint has structure
+        blueprint = result.get("content_blueprint", {})
+        assert len(blueprint.get("structure", [])) >= 2, "Blueprint lacks sections"
+        assert len(blueprint.get("key_takeaways", [])) >= 1, "No takeaways"
+
+
+# =============================================================================
+# Degraded Research Fixtures (Issue 22)
+# =============================================================================
+
+
+@pytest.fixture
+def mock_research_tools_empty() -> Generator[None, None, None]:
+    """Mock research tools returning empty results — simulates search failures."""
+    with patch(
+        "artifactforge.tools.research.web_searcher.run_web_searcher",
+        return_value={"query": "test", "results": [], "sources": []},
+    ):
+        with patch(
+            "artifactforge.tools.research.deep_analyzer.run_deep_analyzer",
+            return_value={"key_findings": [], "summary": "No data available"},
+        ):
+            yield
+
+
+@pytest.fixture
+def mock_research_tools_partial() -> Generator[None, None, None]:
+    """Mock research tools returning sparse, minimal results."""
+    with patch(
+        "artifactforge.tools.research.web_searcher.run_web_searcher",
+        return_value={
+            "query": "test",
+            "results": [
+                {
+                    "title": "Sparse result",
+                    "url": "https://example.com/sparse",
+                    "snippet": "Minimal info.",
+                }
+            ],
+            "sources": ["https://example.com/sparse"],
+        },
+    ):
+        with patch(
+            "artifactforge.tools.research.deep_analyzer.run_deep_analyzer",
+            return_value={
+                "key_findings": ["One minimal finding"],
+                "summary": "Partial analysis",
+            },
+        ):
+            yield
+
+
+@pytest.mark.e2e
+@pytest.mark.slow
+class TestMCRSResearchResilience:
+    """Tests for pipeline behavior with degraded research responses."""
+
+    def _make_initial_state(self, prompt: str) -> MCRSState:
+        return {
+            "user_prompt": prompt,
+            "conversation_context": None,
+            "output_constraints": None,
+            "intent_mode": "auto",
+            "answers_collected": {},
+            "execution_brief": None,
+            "research_map": None,
+            "claim_ledger": None,
+            "analytical_backbone": None,
+            "content_blueprint": None,
+            "draft_v1": None,
+            "red_team_review": None,
+            "verification_report": None,
+            "polished_draft": None,
+            "release_decision": None,
+            "revision_history": [],
+            "current_stage": "",
+            "errors": [],
+            "stage_timing": {},
+            "tokens_used": {},
+            "costs": {},
+            "stage_metadata": {},
+            "trace_id": str(uuid.uuid4()),
+            "repair_context": None,
+            "visual_specs": [],
+            "visual_reviews": [],
+            "generated_visuals": [],
+            "final_with_visuals": None,
+        }
+
+    def test_pipeline_completes_with_empty_research(
+        self,
+        event_collector: Any,
+        mock_research_tools_empty: None,
+        minimal_prompt: str,
+    ) -> None:
+        """Pipeline should complete even when search returns no results."""
+        app = create_mcrs_app()
+        config = {"configurable": {"thread_id": "test-thread"}}
+        result = app.invoke(self._make_initial_state(minimal_prompt), config=config)
+
+        # Pipeline must not crash — a final artifact or error list should exist
+        final = result.get("final_with_visuals") or result.get("polished_draft")
+        errors = result.get("errors", [])
+        assert final is not None or len(errors) > 0, (
+            "Pipeline produced neither output nor recorded errors"
+        )
+
+    def test_pipeline_completes_with_partial_research(
+        self,
+        event_collector: Any,
+        mock_research_tools_partial: None,
+        minimal_prompt: str,
+    ) -> None:
+        """Pipeline should produce output with partial research data."""
+        app = create_mcrs_app()
+        config = {"configurable": {"thread_id": "test-thread"}}
+        result = app.invoke(self._make_initial_state(minimal_prompt), config=config)
+
+        # All key pipeline stages should have executed
+        assert result.get("execution_brief") is not None, "No execution_brief"
+        assert result.get("research_map") is not None, "No research_map"
+        assert result.get("draft_v1") is not None, "No draft produced"
+
+        # Final artifact should still be produced
+        final = result.get("final_with_visuals") or result.get("polished_draft")
+        assert final is not None, "No final artifact with partial research"
 
 
 # =============================================================================

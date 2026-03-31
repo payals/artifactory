@@ -3,6 +3,7 @@
 import json
 from typing import Any
 
+from artifactforge.agents.llm_gateway import extract_json
 from artifactforge.coordinator import artifacts as schemas
 from artifactforge.coordinator.contracts import FINAL_ARBITER_CONTRACT, agent_contract
 from artifactforge.coordinator.validation import validate_all_agents
@@ -76,7 +77,7 @@ def run_final_arbiter(
     result = _call_llm(system=FINAL_ARBITER_SYSTEM, prompt=prompt)
 
     try:
-        parsed = json.loads(result)
+        parsed = json.loads(extract_json(result))
         return schemas.ReleaseDecision(
             status=parsed.get("status", "NOT_READY"),
             confidence=parsed.get("confidence", 0.0),

@@ -3,6 +3,7 @@
 import json
 from typing import Any
 
+from artifactforge.agents.llm_gateway import extract_json
 from artifactforge.coordinator import artifacts as schemas
 from artifactforge.coordinator.contracts import (
     ADVERSARIAL_REVIEWER_CONTRACT,
@@ -41,6 +42,9 @@ For EACH issue, you MUST specify where to send it for repair:
 - output_strategist: Structure wrong for audience
 - draft_writer: Expression/substance needs work
 - polisher: Just needs cleanup
+- visual_designer: Visual specification is wrong or inappropriate
+- visual_reviewer: Visual review missed issues
+- visual_generator: Generated visual is incorrect
 
 ## Temperament
 - Be rigorous and uncompromising
@@ -89,7 +93,7 @@ def run_adversarial_reviewer(
     result = _call_llm(system=ADVERSARIAL_REVIEWER_SYSTEM, prompt=prompt)
 
     try:
-        parsed = json.loads(result)
+        parsed = json.loads(extract_json(result))
         issues = parsed.get("issues", [])
         valid_loci = {
             "intent_architect",
@@ -99,6 +103,9 @@ def run_adversarial_reviewer(
             "output_strategist",
             "draft_writer",
             "polisher",
+            "visual_designer",
+            "visual_reviewer",
+            "visual_generator",
         }
         for i, issue in enumerate(issues):
             if not issue.get("issue_id"):
@@ -110,6 +117,11 @@ def run_adversarial_reviewer(
                 issue["repair_locus"] = PROBLEM_TYPE_DEFAULT_LOCUS.get(
                     issue.get("problem_type", ""), "draft_writer"
                 )
+            issue.setdefault("severity", "MEDIUM")
+            issue.setdefault("section", "")
+            issue.setdefault("problem_type", "shallow_analysis")
+            issue.setdefault("explanation", "")
+            issue.setdefault("suggested_fix", "")
 
         typed_issues = [schemas.RedTeamIssue(**i) for i in issues]
         return schemas.RedTeamReview(

@@ -10,6 +10,7 @@ import logging
 import uuid
 from typing import Any, Optional
 
+from artifactforge.agents.llm_gateway import extract_json
 from artifactforge.coordinator import artifacts as schemas
 from artifactforge.coordinator.contracts import EVIDENCE_LEDGER_CONTRACT, agent_contract
 
@@ -53,7 +54,15 @@ Your job is to transform raw research into atomic, traceable claims with explici
 
 ## Output Format
 Return a JSON object with:
-- claims: array of classified claims
+- claims: array of objects, each with:
+  - claim_id: str (e.g. "C001")
+  - claim_text: str (the claim itself)
+  - classification: one of "VERIFIED", "DERIVED", "ASSUMED"
+  - source_refs: list[str] (source_ids backing this claim)
+  - confidence: float (0.0-1.0)
+  - importance: one of "HIGH", "MEDIUM", "LOW"
+  - dependent_on: list[str] (claim_ids this depends on, empty if none)
+  - notes: str (reasoning for classification)
 - summary: brief overview of epistemic status distribution
 """
 
@@ -119,7 +128,7 @@ def run_evidence_ledger(
 
     # Parse result
     try:
-        parsed = json.loads(result)
+        parsed = json.loads(extract_json(result))
         claims: list[dict] = parsed.get("claims", [])
         summary = parsed.get("summary", "")
     except (json.JSONDecodeError, KeyError):
@@ -134,6 +143,13 @@ def run_evidence_ledger(
     for i, claim in enumerate(claims):
         if not claim.get("claim_id"):
             claim["claim_id"] = f"C{i + 1:03d}"
+        claim.setdefault("claim_text", "")
+        claim.setdefault("classification", "DERIVED")
+        claim.setdefault("source_refs", [])
+        claim.setdefault("confidence", 0.0)
+        claim.setdefault("importance", "MEDIUM")
+        claim.setdefault("dependent_on", [])
+        claim.setdefault("notes", "")
         typed_claims.append(schemas.Claim(**claim))
 
     return schemas.ClaimLedger(claims=typed_claims, summary=summary)

@@ -4,6 +4,7 @@ import json
 import logging
 from typing import Any, Optional
 
+from artifactforge.agents.llm_gateway import extract_json
 from artifactforge.coordinator import artifacts as schemas
 from artifactforge.coordinator.contracts import RESEARCH_LEAD_CONTRACT, agent_contract
 from artifactforge.tools.research.deep_analyzer import run_deep_analyzer
@@ -100,7 +101,7 @@ def run_research_lead(
     result = _call_llm(system=RESEARCH_LEAD_SYSTEM, prompt=prompt)
 
     try:
-        parsed = json.loads(result)
+        parsed = json.loads(extract_json(result))
         sources = parsed.get("sources", [])
         for i, s in enumerate(sources):
             if not s.get("source_id"):
@@ -213,10 +214,13 @@ def _build_research_prompt(
 
 Analyze these search results and create a research map with sources, facts, key dimensions, competing views, and data gaps. Return JSON with:
 - "sources": list of {{
+  "source_id": str (e.g. "S001"),
   "title": str,
-  "url": str,
-  "relevance_score": float (0-1),
-  "key_findings": list[str]
+  "url": str or null,
+  "source_type": one of "official", "news", "research", "reference", "internal", "other",
+  "reliability": one of "HIGH", "MEDIUM", "LOW",
+  "notes": str (key findings and relevance summary),
+  "publish_date": str or null (ISO date if known)
 }}
 - "facts": list of str (verified facts from sources)
 - "key_dimensions": list of str (dimensions to analyze)

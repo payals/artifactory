@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
+from artifactforge.agents.llm_gateway import extract_json
 from artifactforge.coordinator import artifacts as schemas
 from artifactforge.coordinator.contracts import (
     INTENT_ARCHITECT_CONTRACT,
@@ -148,7 +149,7 @@ def run_intent_architect(
     result = _call_llm(system=INTENT_ARCHITECT_SYSTEM, prompt=prompt)
 
     try:
-        parsed = json.loads(result)
+        parsed = json.loads(extract_json(result))
         parsed.setdefault("intent_mode", intent_mode)
         parsed.setdefault("answers_collected", answers_collected or {})
         # Validate required fields
@@ -272,7 +273,7 @@ Generate 3-5 clarification questions as a JSON array."""
     result = _call_llm(system=CLARIFICATION_QUESTION_SYSTEM, prompt=prompt)
 
     try:
-        parsed = json.loads(result)
+        parsed = json.loads(extract_json(result))
         questions = []
         for item in parsed:
             questions.append(

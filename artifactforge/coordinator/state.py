@@ -90,7 +90,6 @@ class MCRSState(TypedDict):
     # Phase 6: Draft
     # =========================================================================
     draft_v1: Optional[str]
-    draft_version: int
 
     # =========================================================================
     # Phase 7: Review
@@ -116,8 +115,7 @@ class MCRSState(TypedDict):
     # Revision Tracking (prevents infinite loops)
     # =========================================================================
     revision_history: list[dict]
-    current_stage: str
-    retry_count: int
+    current_stage: str  # Set by @trace_node decorator; read by _repair_context_for_node
 
     # =========================================================================
     # Errors & Metadata

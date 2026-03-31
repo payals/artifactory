@@ -1,23 +1,16 @@
 """Deep analyzer tool - analyzes search results in depth."""
 
 import asyncio
-from datetime import datetime
 import logging
-import os
 from typing import Any, List
 
 import httpx
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
-from artifactforge.config import get_settings
 from artifactforge.observability.middleware import emit_status, get_trace_id
 
 logger = logging.getLogger(__name__)
-
-settings = get_settings()
-OPENAI_API_KEY = settings.openai_api_key or os.getenv("OPENAI_API_KEY")
-ANTHROPIC_API_KEY = settings.anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")
 
 
 class FetchResult(BaseModel):
@@ -67,113 +60,27 @@ async def _fetch_url_content(url: str) -> FetchResult:
         return FetchResult(url=url, success=False, error=str(e))
 
 
-async def _analyze_with_llm(
+def _analyze_content(
     sources: List[str], content: str, query: str
 ) -> dict[str, Any]:
-    """Analyze content using LLM."""
-    if ANTHROPIC_API_KEY:
-        return await _analyze_with_anthropic(sources, content, query)
-    elif OPENAI_API_KEY:
-        return await _analyze_with_openai(sources, content, query)
-    else:
-        return _mock_analysis(sources, query)
+    """Analyze content using the centralized LLM gateway."""
+    from artifactforge.agents.llm_gateway import call_llm
 
-
-async def _analyze_with_anthropic(
-    sources: List[str], content: str, query: str
-) -> dict[str, Any]:
-    """Analyze using Anthropic API."""
-    headers: dict[str, str] = {
-        "x-api-key": ANTHROPIC_API_KEY or "",
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=180.0) as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers=headers,
-            json={
-                "model": "claude-3-haiku-20240307",
-                "max_tokens": 1024,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": f"""Analyze the following web content for the query: {query}
-
-Sources: {", ".join(sources)}
-
-Content:
-{content[:8000]}
-
-Provide:
-1. Key findings (3-5 bullet points)
-2. A brief summary""",
-                    }
-                ],
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    text = data["content"][0]["text"]
+    text = call_llm(
+        system_prompt="You are an analytical research assistant.",
+        user_prompt=(
+            f"Analyze the following web content for the query: {query}\n\n"
+            f"Sources: {', '.join(sources)}\n\n"
+            f"Content:\n{content[:8000]}\n\n"
+            "Provide:\n1. Key findings (3-5 bullet points)\n2. A brief summary"
+        ),
+        agent_name="deep_analyzer",
+    )
     lines = text.split("\n")
     findings = [l for l in lines if l.strip() and not l.startswith("Provide:")]
-    summary = f"Analysis of {len(sources)} sources using Claude"
-
-    return {"key_findings": findings[:5], "summary": summary}
-
-
-async def _analyze_with_openai(
-    sources: List[str], content: str, query: str
-) -> dict[str, Any]:
-    """Analyze using OpenAI API."""
-    async with httpx.AsyncClient(timeout=180.0) as client:
-        response = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "gpt-4o-mini",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": f"""Analyze the following web content for the query: {query}
-
-Sources: {", ".join(sources)}
-
-Content:
-{content[:8000]}
-
-Provide:
-1. Key findings (3-5 bullet points)
-2. A brief summary""",
-                    }
-                ],
-                "max_tokens": 1024,
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    text = data["choices"][0]["message"]["content"]
-    lines = text.split("\n")
-    findings = [l for l in lines if l.strip() and not l.startswith("Provide:")]
-    summary = f"Analysis of {len(sources)} sources using GPT-4"
-
-    return {"key_findings": findings[:5], "summary": summary}
-
-
-def _mock_analysis(sources: List[str], query: str) -> dict[str, Any]:
-    """Mock analysis when no API keys available."""
     return {
-        "key_findings": [
-            f"Found relevant information about {query}",
-            "Multiple sources confirm key trends",
-            "Content analysis reveals common themes",
-        ],
-        "summary": f"Analysis of {len(sources)} sources (no LLM API key - using mock)",
+        "key_findings": findings[:5],
+        "summary": f"Analysis of {len(sources)} sources",
     }
 
 
@@ -186,15 +93,11 @@ def deep_analyzer(sources: List[str], query: str) -> dict[str, Any]:
     return run_deep_analyzer(sources=sources, query=query)
 
 
-def run_deep_analyzer(sources: List[str], query: str) -> dict[str, Any]:
-    emit_status(
-        f"Starting deep analysis of {len(sources)} sources",
-        trace_id=get_trace_id(),
-        node_name="deep_analyzer",
-        metadata={"kind": "status", "query": query, "source_count": len(sources)},
-    )
-
-    fetch_results = asyncio.run(_fetch_all_sources(sources))
+async def _fetch_and_analyze(
+    sources: List[str], query: str
+) -> dict[str, Any]:
+    """Fetch all sources and analyze them in one coroutine."""
+    fetch_results = await _fetch_all_sources(sources)
     successful_results = [r for r in fetch_results if r.success]
     failed_results = [r for r in fetch_results if not r.success]
 
@@ -215,17 +118,21 @@ def run_deep_analyzer(sources: List[str], query: str) -> dict[str, Any]:
     valid_sources = [r.url for r in successful_results]
     combined = "\n\n---\n\n".join(contents)
 
+    return _analyze_content(valid_sources, combined, query)
+
+
+def run_deep_analyzer(sources: List[str], query: str) -> dict[str, Any]:
+    from artifactforge.tools.research.async_compat import run_async_safely
+
     emit_status(
-        f"Analyzing {len(successful_results)} fetched sources with LLM",
+        f"Starting deep analysis of {len(sources)} sources",
         trace_id=get_trace_id(),
         node_name="deep_analyzer",
-        metadata={
-            "kind": "analysis",
-            "query": query,
-            "source_count": len(successful_results),
-        },
+        metadata={"kind": "status", "query": query, "source_count": len(sources)},
     )
-    result = asyncio.run(_analyze_with_llm(valid_sources, combined, query))
+
+    result = run_async_safely(_fetch_and_analyze(sources, query))
+
     emit_status(
         f"Analysis complete with {len(result.get('key_findings', []))} findings",
         trace_id=get_trace_id(),

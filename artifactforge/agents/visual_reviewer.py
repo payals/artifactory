@@ -3,6 +3,7 @@
 import json
 from typing import Any, Optional
 
+from artifactforge.agents.llm_gateway import extract_json
 from artifactforge.coordinator import artifacts as schemas
 from artifactforge.coordinator.contracts import VISUAL_REVIEWER_CONTRACT, agent_contract
 
@@ -52,7 +53,7 @@ def run_visual_reviewer(
     result = _call_llm(system=VISUAL_REVIEWER_SYSTEM, prompt=prompt)
 
     try:
-        parsed = json.loads(result)
+        parsed = json.loads(extract_json(result))
         if isinstance(parsed, list):
             return [_normalize_review(v) for v in parsed]
         return []

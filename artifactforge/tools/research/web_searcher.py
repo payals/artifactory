@@ -164,13 +164,12 @@ def web_searcher(query: str, num_results: int = 5) -> dict[str, Any]:
     return result
 
 
-def run_web_searcher(query: str, num_results: int = 5) -> dict[str, Any]:
-    import asyncio
-
+async def _search_with_fallback(query: str, num_results: int) -> SearchResult:
+    """Run Tavily search with DuckDuckGo fallback, all in one coroutine."""
     if TAVILY_API_KEY:
-        result = asyncio.run(_search_tavily(query, num_results))
+        result = await _search_tavily(query, num_results)
         if not result.success:
-            fallback = asyncio.run(_search_ddg(query, num_results))
+            fallback = await _search_ddg(query, num_results)
             if not fallback.success:
                 raise SearchError(
                     f"All search backends failed for query '{query}'",
@@ -178,12 +177,19 @@ def run_web_searcher(query: str, num_results: int = 5) -> dict[str, Any]:
                 )
             result = fallback
     else:
-        result = asyncio.run(_search_ddg(query, num_results))
+        result = await _search_ddg(query, num_results)
         if not result.success:
             raise SearchError(
                 f"Search failed for query '{query}'",
                 errors=[result.error] if result.error else [],
             )
+    return result
+
+
+def run_web_searcher(query: str, num_results: int = 5) -> dict[str, Any]:
+    from artifactforge.tools.research.async_compat import run_async_safely
+
+    result = run_async_safely(_search_with_fallback(query, num_results))
 
     return {
         "query": result.query,

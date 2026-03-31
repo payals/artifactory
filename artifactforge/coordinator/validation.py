@@ -109,22 +109,7 @@ def validate_all_agents(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     return validation_results
 
 
-def should_reroute_for_validation_failures(
-    validation_results: List[Dict[str, Any]],
-) -> bool:
-    """Determine if validation failures require rerouting."""
-    for result in validation_results:
-        if not result.get("overall_passed", True):
-            # Check if any HIGH severity failures
-            criteria_results = result.get("criteria_results", [])
-            for criteria in criteria_results:
-                if criteria.get("severity") == "HIGH" and not criteria.get("satisfied"):
-                    return True
-    return False
-
-
 __all__ = [
     "validate_agent_output",
     "validate_all_agents",
-    "should_reroute_for_validation_failures",
 ]

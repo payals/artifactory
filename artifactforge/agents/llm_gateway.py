@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -341,10 +342,23 @@ def call_llm_sync(
         )
 
 
+def extract_json(text: str) -> str:
+    """Strip markdown code fences from LLM output to extract raw JSON.
+
+    Many LLMs wrap JSON in ```json ... ``` blocks. This extracts the
+    content so json.loads() can parse it.
+    """
+    match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return text.strip()
+
+
 __all__ = [
     "call_llm",
     "call_llm_async",
     "call_llm_sync",
+    "extract_json",
     "register_callback",
     "get_call_history",
     "get_stats",

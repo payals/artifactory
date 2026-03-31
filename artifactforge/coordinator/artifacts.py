@@ -147,6 +147,9 @@ class RedTeamIssue(TypedDict):
         "output_strategist",
         "draft_writer",
         "polisher",
+        "visual_designer",
+        "visual_reviewer",
+        "visual_generator",
     ]
     explanation: str
     suggested_fix: str
@@ -178,6 +181,9 @@ class VerificationItem(TypedDict):
         "output_strategist",
         "draft_writer",
         "polisher",
+        "visual_designer",
+        "visual_reviewer",
+        "visual_generator",
     ]
     notes: str
     required_action: Optional[

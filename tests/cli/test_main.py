@@ -1,6 +1,8 @@
 import asyncio
 import importlib
 
+import pytest
+
 cli_main = importlib.import_module("artifactforge.cli.main")
 
 
@@ -64,21 +66,28 @@ class _FakeApp:
         return self.result
 
 
-class _FakeWeasyHTML:
-    last_string: str | None = None
-    last_base_url: str | None = None
-    written_paths: list[str] = []
+def _make_fake_weasy_class() -> type:
+    """Return a fresh _FakeWeasyHTML class with isolated class-level state."""
 
-    def __init__(self, string: str, base_url: str | None = None) -> None:
-        type(self).last_string = string
-        type(self).last_base_url = base_url
+    class _FakeWeasyHTML:
+        last_string: str | None = None
+        last_base_url: str | None = None
+        written_paths: list[str] = []
 
-    def write_pdf(self, path: str) -> None:
-        type(self).written_paths.append(path)
+        def __init__(self, string: str, base_url: str | None = None) -> None:
+            type(self).last_string = string
+            type(self).last_base_url = base_url
+
+        def write_pdf(self, path: str) -> None:
+            type(self).written_paths.append(path)
+
+    return _FakeWeasyHTML
 
 
-class _FakeWeasyModule:
-    HTML = _FakeWeasyHTML
+@pytest.fixture
+def fake_weasy():
+    """Provide a fresh _FakeWeasyHTML class per test — no shared mutable state."""
+    return _make_fake_weasy_class()
 
 
 class _CalledProcess:
@@ -131,29 +140,28 @@ def test_run_pipeline_records_pipeline_metrics(monkeypatch) -> None:
 
 
 def test_save_output_converts_markdown_to_styled_html_for_pdf(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, fake_weasy
 ) -> None:
     markdown = "# Title\n\nA **bold** paragraph.\n\n- First\n- Second"
 
-    _FakeWeasyHTML.last_string = None
-    _FakeWeasyHTML.last_base_url = None
-    _FakeWeasyHTML.written_paths = []
+    class _FakeModule:
+        HTML = fake_weasy
 
     monkeypatch.setattr(cli_main, "OUTPUTS_DIR", tmp_path)
     monkeypatch.setattr(cli_main.shutil, "which", lambda name: None)
-    monkeypatch.setattr(cli_main, "import_module", lambda name: _FakeWeasyModule)
+    monkeypatch.setattr(cli_main, "import_module", lambda name: _FakeModule)
 
     saved_path = cli_main.save_output(markdown, "Styled PDF Example")
 
     assert saved_path == next(tmp_path.glob("*.md"))
-    assert _FakeWeasyHTML.last_string is not None
-    assert "<html" in _FakeWeasyHTML.last_string
-    assert "<h1>Title</h1>" in _FakeWeasyHTML.last_string
-    assert "<strong>bold</strong>" in _FakeWeasyHTML.last_string
-    assert "<li>First</li>" in _FakeWeasyHTML.last_string
-    assert "font-family" in _FakeWeasyHTML.last_string
-    assert _FakeWeasyHTML.last_base_url == str(tmp_path)
-    assert len(_FakeWeasyHTML.written_paths) == 1
+    assert fake_weasy.last_string is not None
+    assert "<html" in fake_weasy.last_string
+    assert "<h1>Title</h1>" in fake_weasy.last_string
+    assert "<strong>bold</strong>" in fake_weasy.last_string
+    assert "<li>First</li>" in fake_weasy.last_string
+    assert "font-family" in fake_weasy.last_string
+    assert fake_weasy.last_base_url == str(tmp_path)
+    assert len(fake_weasy.written_paths) == 1
 
 
 def test_save_output_prefers_pandoc_for_pdf_generation(monkeypatch, tmp_path) -> None:
@@ -195,13 +203,12 @@ def test_save_output_prefers_pandoc_for_pdf_generation(monkeypatch, tmp_path) ->
 
 
 def test_save_output_falls_back_to_weasyprint_when_pandoc_generation_fails(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, fake_weasy
 ) -> None:
     markdown = "# Title\n\n- First\n- Second"
 
-    _FakeWeasyHTML.last_string = None
-    _FakeWeasyHTML.last_base_url = None
-    _FakeWeasyHTML.written_paths = []
+    class _FakeModule:
+        HTML = fake_weasy
 
     monkeypatch.setattr(cli_main, "OUTPUTS_DIR", tmp_path)
     monkeypatch.setattr(
@@ -216,16 +223,16 @@ def test_save_output_falls_back_to_weasyprint_when_pandoc_generation_fails(
         raise cli_main.subprocess.CalledProcessError(returncode=1, cmd=command)
 
     monkeypatch.setattr(cli_main.subprocess, "run", fail_pandoc)
-    monkeypatch.setattr(cli_main, "import_module", lambda name: _FakeWeasyModule)
+    monkeypatch.setattr(cli_main, "import_module", lambda name: _FakeModule)
 
     saved_path = cli_main.save_output(markdown, "Fallback PDF Example")
 
     assert saved_path == next(tmp_path.glob("*.md"))
-    assert _FakeWeasyHTML.last_string is not None
-    assert "<html" in _FakeWeasyHTML.last_string
-    assert "<li>First</li>" in _FakeWeasyHTML.last_string
-    assert _FakeWeasyHTML.last_base_url == str(tmp_path)
-    assert len(_FakeWeasyHTML.written_paths) == 1
+    assert fake_weasy.last_string is not None
+    assert "<html" in fake_weasy.last_string
+    assert "<li>First</li>" in fake_weasy.last_string
+    assert fake_weasy.last_base_url == str(tmp_path)
+    assert len(fake_weasy.written_paths) == 1
 
 
 def test_select_output_content_falls_back_to_draft_when_polish_is_truncated() -> None:

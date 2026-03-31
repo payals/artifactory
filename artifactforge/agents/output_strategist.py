@@ -3,6 +3,7 @@
 import json
 from typing import Any
 
+from artifactforge.agents.llm_gateway import extract_json
 from artifactforge.coordinator import artifacts as schemas
 from artifactforge.coordinator.contracts import (
     OUTPUT_STRATEGIST_CONTRACT,
@@ -80,7 +81,7 @@ def run_output_strategist(
     result = _call_llm(system=OUTPUT_STRATEGIST_SYSTEM, prompt=prompt)
 
     try:
-        parsed = json.loads(result)
+        parsed = json.loads(extract_json(result))
         return schemas.ContentBlueprint(
             structure=parsed.get("structure", []),
             section_purposes=parsed.get("section_purposes", {}),

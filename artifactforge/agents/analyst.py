@@ -3,6 +3,7 @@
 import json
 from typing import Any
 
+from artifactforge.agents.llm_gateway import extract_json
 from artifactforge.coordinator import artifacts as schemas
 from artifactforge.coordinator.contracts import ANALYST_CONTRACT, agent_contract
 
@@ -57,7 +58,7 @@ def run_analyst(
     result = _call_llm(system=ANALYST_SYSTEM, prompt=prompt)
 
     try:
-        parsed = json.loads(result)
+        parsed = json.loads(extract_json(result))
         return schemas.AnalyticalBackbone(
             key_findings=parsed.get("key_findings", []),
             primary_drivers=parsed.get("primary_drivers", []),

@@ -3,6 +3,7 @@
 import json
 from typing import Any, Optional
 
+from artifactforge.agents.llm_gateway import extract_json
 from artifactforge.coordinator import artifacts as schemas
 from artifactforge.coordinator.contracts import VISUAL_DESIGNER_CONTRACT, agent_contract
 
@@ -70,7 +71,7 @@ def run_visual_designer(
     result = _call_llm(system=VISUAL_DESIGNER_SYSTEM, prompt=prompt)
 
     try:
-        parsed = json.loads(result)
+        parsed = json.loads(extract_json(result))
         if isinstance(parsed, list):
             return [_normalize_spec(v, i) for i, v in enumerate(parsed)]
         return []

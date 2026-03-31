@@ -314,7 +314,6 @@ async def _run_pipeline(
         "output_constraints": {"output_type": output_type},
         "revision_history": [],
         "current_stage": "",
-        "retry_count": 0,
         "errors": [],
         "stage_timing": {},
         "intent_mode": intent_mode,

@@ -50,13 +50,11 @@ async def _resolve_library_id(library: str) -> str | None:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 f"https://context7.com/api/libraries/search?q={library}",
-                headers={
-                    "Authorization": f"Bearer {CONTEXT7_API_KEY}"
+                headers=(
+                    {"Authorization": f"Bearer {CONTEXT7_API_KEY}"}
                     if CONTEXT7_API_KEY
-                    else "",
-                }
-                if CONTEXT7_API_KEY
-                else {},
+                    else {}
+                ),
             )
             response.raise_for_status()
             data = response.json()
@@ -98,14 +96,14 @@ async def _search_context7_api(
                     "query": query,
                     "numResults": num_results,
                 },
-                headers={
-                    "Authorization": f"Bearer {CONTEXT7_API_KEY}"
+                headers=(
+                    {
+                        "Authorization": f"Bearer {CONTEXT7_API_KEY}",
+                        "Content-Type": "application/json",
+                    }
                     if CONTEXT7_API_KEY
-                    else "",
-                    "Content-Type": "application/json",
-                }
-                if CONTEXT7_API_KEY
-                else {"Content-Type": "application/json"},
+                    else {"Content-Type": "application/json"}
+                ),
             )
             response.raise_for_status()
             data = response.json()

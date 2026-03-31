@@ -56,7 +56,7 @@ class TestRFPSpecializedResearcher:
             },
         ]
         competitors = self.researcher._extract_competitors(sources)
-        assert len(competitors) >= 0
+        assert len(competitors) > 0
 
     def test_extract_compliance_keywords(self):
         sources = [

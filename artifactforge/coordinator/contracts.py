@@ -21,6 +21,7 @@ class AgentContract:
     forbidden_behaviors: list[str]
     pass_fail_criteria: list[str]
     max_retries: int = 2
+    output_is_list: bool = False
 
     # Runtime
     execute: Optional[Callable] = field(default=None, repr=False)
@@ -249,7 +250,10 @@ FINAL_ARBITER_CONTRACT = AgentContract(
         "draft_v1",
         "red_team_review",
         "verification_report",
-        "all_artifacts",
+        "research_map",
+        "claim_ledger",
+        "analytical_backbone",
+        "content_blueprint",
     ],
     required_output_schema=artifact_schemas.ReleaseDecision,
     forbidden_behaviors=[
@@ -272,6 +276,7 @@ VISUAL_DESIGNER_CONTRACT = AgentContract(
     mission="Analyze documents and suggest appropriate visualizations with Mermaid or Python.",
     inputs=["draft_v1", "content_blueprint"],
     required_output_schema=artifact_schemas.VisualSpec,
+    output_is_list=True,
     forbidden_behaviors=[
         "Do not suggest visuals that don't add value",
         "Do not use complex visuals when simple would work",
@@ -292,6 +297,7 @@ VISUAL_REVIEWER_CONTRACT = AgentContract(
     mission="Validate visual suggestions for clarity, accuracy, and appropriateness.",
     inputs=["visual_specs", "draft_v1"],
     required_output_schema=artifact_schemas.VisualReview,
+    output_is_list=True,
     forbidden_behaviors=[
         "Do not approve misleading visuals",
         "Do not miss placement errors",
@@ -310,6 +316,7 @@ VISUAL_GENERATOR_CONTRACT = AgentContract(
     mission="Generate visual assets - Mermaid for simple, Python/matplotlib for complex.",
     inputs=["visual_specs", "visual_reviews"],
     required_output_schema=artifact_schemas.VisualGeneration,
+    output_is_list=True,
     forbidden_behaviors=[
         "Do not skip Mermaid for simple diagrams",
         "Do not generate invalid matplotlib code",

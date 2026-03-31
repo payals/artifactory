@@ -3,6 +3,7 @@
 import json
 from typing import Any
 
+from artifactforge.agents.llm_gateway import extract_json
 from artifactforge.coordinator import artifacts as schemas
 from artifactforge.coordinator.contracts import VERIFIER_CONTRACT, agent_contract
 
@@ -40,6 +41,9 @@ For EACH item, specify where to send for repair:
 - output_strategist: Structure/messaging wrong
 - draft_writer: Expression needs work
 - polisher: Just cleanup needed
+- visual_designer: Visual specification wrong or inappropriate
+- visual_reviewer: Visual review missed issues
+- visual_generator: Generated visual is incorrect
 
 ## Language Downgrades
 - "is" -> "appears to be" / "may be"
@@ -74,7 +78,7 @@ def run_verifier(
     result = _call_llm(system=VERIFIER_SYSTEM, prompt=prompt)
 
     try:
-        parsed = json.loads(result)
+        parsed = json.loads(extract_json(result))
         items = parsed.get("items", [])
         valid_loci = {
             "intent_architect",
@@ -84,6 +88,9 @@ def run_verifier(
             "output_strategist",
             "draft_writer",
             "polisher",
+            "visual_designer",
+            "visual_reviewer",
+            "visual_generator",
         }
         for item in items:
             if (
@@ -91,12 +98,18 @@ def run_verifier(
                 or item.get("repair_locus") not in valid_loci
             ):
                 item["repair_locus"] = "evidence_ledger"
+            item.setdefault("claim_id", "")
+            item.setdefault("status", "WEAK")
+            item.setdefault("notes", "")
+            item.setdefault("required_action", None)
         typed_items = [schemas.VerificationItem(**i) for i in items]
         return schemas.VerificationReport(
             items=typed_items,
             summary=parsed.get("summary", ""),
             passed=parsed.get(
-                "passed", all(i.get("status") != "UNSUPPORTED" for i in items)
+                "passed",
+                bool(items)
+                and all(i.get("status") != "UNSUPPORTED" for i in items),
             ),
         )
     except (json.JSONDecodeError, KeyError):
