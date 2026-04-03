@@ -102,6 +102,15 @@ For slides → narrative arc, audience sophistication, aha moments, objections t
 For blog → audience, thesis, novelty, counterarguments, readability
 For decision memo → options, pros/cons, risks, recommendation, timeline
 
+## Scope and Quantity Extraction
+Look for explicit or implicit quantity/scope signals in the user prompt:
+- Numeric requirements: "top 5", "10 ways", "3-5 examples" → extract min_items/max_items
+- Breadth signals: "comprehensive", "overview", "exhaustive" → breadth_preference: "broad"
+- Depth signals: "deep dive", "in-depth analysis" → breadth_preference: "deep"
+- List/enumeration requests: "ways to", "strategies for", "methods" → default to breadth_preference: "broad"
+If the user says "top 5 or 10", set min_items: 5, max_items: 10.
+If no quantity signals exist, set scope_guidance to null.
+
 ## Output Requirements
 Return a JSON object with:
 - user_goal: What the user actually needs (not just what they asked for)
@@ -116,6 +125,7 @@ Return a JSON object with:
 - rigor_level: LOW/MEDIUM/HIGH based on stakes
 - persuasion_level: LOW/MEDIUM/HIGH based on audience alignment
 - open_questions_to_resolve: What needs research to resolve
+- scope_guidance: Quantity/breadth requirements extracted from prompt, e.g. {"min_items": 5, "max_items": 10, "breadth_preference": "broad"} or null if none
 """
 
 
@@ -229,6 +239,7 @@ def _validate_and_defaults(parsed: dict) -> schemas.ExecutionBrief:
         "rigor_level": parsed.get("rigor_level", "MEDIUM"),
         "persuasion_level": parsed.get("persuasion_level", "MEDIUM"),
         "open_questions_to_resolve": parsed.get("open_questions_to_resolve", []),
+        "scope_guidance": parsed.get("scope_guidance"),
         "intent_mode": parsed.get("intent_mode", "auto"),
         "answers_collected": parsed.get("answers_collected", {}),
     }
@@ -253,6 +264,7 @@ def _create_default_brief(
         "rigor_level": "MEDIUM",
         "persuasion_level": "MEDIUM",
         "open_questions_to_resolve": [],
+        "scope_guidance": None,
         "intent_mode": intent_mode if intent_mode == "interactive" else "auto",
         "answers_collected": answers_collected or {},
     }

@@ -2,9 +2,11 @@
 
 import contextvars
 import functools
+import json
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import structlog
@@ -116,6 +118,59 @@ def _record_llm_stats(node_name: str) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# Intermediate state dump to disk
+# ---------------------------------------------------------------------------
+
+_STATE_DUMP_DIR = Path(__file__).parent.parent.parent / "outputs"
+
+_DUMP_FIELDS: frozenset[str] = frozenset({
+    "user_prompt", "output_constraints",
+    "execution_brief", "research_map", "claim_ledger",
+    "analytical_backbone", "content_blueprint",
+    "draft_v1", "red_team_review", "verification_report",
+    "polished_draft", "release_decision",
+    "visual_specs", "visual_reviews", "generated_visuals", "final_with_visuals",
+    "revision_history", "revision_quality_history",
+    "errors", "stage_timing", "current_stage",
+    "trace_id", "artifact_id",
+})
+
+
+def _dump_state(trace_id: str, node_name: str, state: dict, result: dict) -> None:
+    """Best-effort dump of pipeline state to disk after a node completes."""
+    try:
+        merged = {**state, **result}
+        filtered = {k: v for k, v in merged.items() if k in _DUMP_FIELDS and v is not None}
+
+        run_dir = _STATE_DUMP_DIR / trace_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        def _write(path: Path, data: dict) -> None:
+            path.write_text(json.dumps(data, indent=2, default=str, ensure_ascii=False))
+
+        _write(run_dir / f"state_after_{node_name}.json", filtered)
+        _write(run_dir / "state_latest.json", filtered)
+    except Exception as exc:
+        logger.warning("state_dump_failed", node=node_name, error=str(exc))
+
+
+# Mapping from node name to the primary output field it produces.
+# Used by resume logic to skip nodes whose output already exists.
+_NODE_OUTPUT_KEY: dict[str, str] = {
+    "intent_architect": "execution_brief",
+    "research_lead": "research_map",
+    "evidence_ledger": "claim_ledger",
+    "analyst": "analytical_backbone",
+    "output_strategist": "content_blueprint",
+    "draft_writer": "draft_v1",
+    "adversarial_reviewer": "red_team_review",
+    "verifier": "verification_report",
+    "polisher": "polished_draft",
+    "final_arbiter": "release_decision",
+}
+
+
 def trace_node(node_name: str) -> Callable:
     """Decorator to add observability to LangGraph nodes.
 
@@ -125,6 +180,32 @@ def trace_node(node_name: str) -> Callable:
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(state: dict[str, Any], *args, **kwargs) -> dict[str, Any]:
+            # ----------------------------------------------------------
+            # Resume: skip nodes whose output was loaded from disk
+            # ----------------------------------------------------------
+            resumed_nodes: set | None = state.get("_resumed_nodes")
+            output_key = _NODE_OUTPUT_KEY.get(node_name)
+            if (
+                resumed_nodes is not None
+                and output_key
+                and output_key in resumed_nodes
+                and state.get(output_key) is not None
+            ):
+                logger.info(
+                    "node_skipped_resume",
+                    node=node_name,
+                    output_key=output_key,
+                )
+                emit_status(
+                    f"Skipped (resumed from disk)",
+                    trace_id=state.get("trace_id"),
+                    node_name=node_name,
+                    metadata={"kind": "status", "phase": "skipped"},
+                )
+                # Remove key so revision loops re-execute this node
+                remaining = resumed_nodes - {output_key}
+                return {"_resumed_nodes": remaining or None}
+
             trace_id = state.get("trace_id") or get_trace_id()
             set_trace_id(trace_id)
             start_time = time.perf_counter()
@@ -268,6 +349,10 @@ def trace_node(node_name: str) -> Callable:
                 except Exception:
                     pass
 
+                # Dump intermediate state to disk (best-effort)
+                if trace_id:
+                    _dump_state(trace_id, node_name, state, result)
+
                 return result
 
             except Exception as e:
@@ -338,6 +423,10 @@ def trace_node(node_name: str) -> Callable:
                         )
                 except Exception:
                     pass
+
+                # Dump state on error too — captures partial progress
+                if trace_id:
+                    _dump_state(trace_id, node_name, state, result)
 
                 raise
 

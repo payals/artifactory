@@ -60,7 +60,7 @@ def test_research_lead_node_passes_existing_research_and_repair_context(
 def test_draft_writer_node_records_review_repair_trigger(monkeypatch) -> None:
     monkeypatch.setattr(
         "artifactforge.agents.run_draft_writer",
-        lambda execution_brief, claim_ledger, analytical_backbone, content_blueprint, repair_context=None, learnings_context=None: (
+        lambda execution_brief, claim_ledger, analytical_backbone, content_blueprint, repair_context=None, learnings_context=None, taper_context=None: (
             "draft"
         ),
     )

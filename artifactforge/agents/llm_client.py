@@ -13,14 +13,14 @@ OPENAI_API_KEY = settings.get_openai_api_key()
 OPENAI_API_BASE = settings.get_openai_base_url()
 ANTHROPIC_API_KEY = settings.anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")
 
-MLX_SERVER_URL = os.getenv("MLX_SERVER_URL", "")
+MLX_SERVER_URL = os.getenv("MLX_SERVER_URL", "") or ""
 MLX_MODEL_PATH = os.getenv(
     "MLX_MODEL_PATH",
     "/Users/pi/.cache/huggingface/hub/models--mlx-community--Qwen3.5-9B-MLX-4bit/snapshots/938d8919941c6e7efd3c7150eff7fe9d12afa631",
 )
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "kimi-k2.5:cloud")
+OLLAMA_BASE_URL = settings.ollama_base_url or os.getenv("OLLAMA_BASE_URL", "")
+OLLAMA_MODEL = settings.ollama_model or os.getenv("OLLAMA_MODEL", "kimi-k2.5:cloud")
 
 
 Provider = Literal["openai", "anthropic", "mock", "openrouter", "mlx", "ollama"]
@@ -46,7 +46,7 @@ async def call_llm(
     provider: Provider | None = None,
     model: str | None = None,
     temperature: float = 0.7,
-    max_tokens: int = 32000,
+    max_tokens: int = 128000,
 ) -> str:
     if provider is None:
         provider = get_provider()
@@ -153,7 +153,17 @@ async def _call_openai(
             },
         )
         response.raise_for_status()
-        data = response.json()
+        try:
+            data = response.json()
+        except json.JSONDecodeError:
+            # OpenRouter sometimes returns truncated JSON — salvage content if possible
+            text = response.text
+            import re
+
+            match = re.search(r'"content"\s*:\s*"(.*)', text, re.DOTALL)
+            if match:
+                return match.group(1).rsplit('"', 1)[0]
+            raise
 
     msg = data["choices"][0]["message"]
     return msg.get("content") or msg.get("reasoning") or ""
@@ -196,6 +206,8 @@ async def _call_ollama(
     max_tokens: int,
 ) -> str:
     ollama_model = model if model and model != "ollama" else OLLAMA_MODEL
+    # Cloud models may have lower max output limits; cap to avoid 400 errors
+    capped_tokens = min(max_tokens, 65536)
     async with httpx.AsyncClient(timeout=600.0) as client:
         response = await client.post(
             f"{OLLAMA_BASE_URL}/api/chat",
@@ -206,7 +218,7 @@ async def _call_ollama(
                     {"role": "user", "content": user_prompt},
                 ],
                 "temperature": temperature,
-                "options": {"num_predict": max_tokens},
+                "options": {"num_predict": capped_tokens},
                 "stream": False,
             },
         )
@@ -232,7 +244,7 @@ def call_llm_sync(
     provider: Provider | None = None,
     model: str | None = None,
     temperature: float = 0.7,
-    max_tokens: int = 32000,
+    max_tokens: int = 128000,
 ) -> str:
     """Synchronous wrapper for call_llm."""
     import asyncio

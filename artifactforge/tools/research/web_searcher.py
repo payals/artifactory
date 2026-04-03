@@ -38,7 +38,7 @@ class WebSearchInput(BaseModel):
     """Input for web searcher."""
 
     query: str = Field(description="The search query")
-    num_results: int = Field(default=5, description="Number of results")
+    num_results: int = Field(default=10, description="Number of results")
 
 
 async def _search_tavily(query: str, num_results: int) -> SearchResult:
@@ -142,7 +142,7 @@ def _parse_ddg_html(html: str, num_results: int) -> list[dict[str, str]]:
 
 
 @tool(args_schema=WebSearchInput)
-def web_searcher(query: str, num_results: int = 5) -> dict[str, Any]:
+def web_searcher(query: str, num_results: int = 10) -> dict[str, Any]:
     """Search the web for information. Returns URLs and summaries.
 
     Uses Tavily API if TAVILY_API_KEY is set, otherwise falls back to DuckDuckGo.
@@ -186,7 +186,7 @@ async def _search_with_fallback(query: str, num_results: int) -> SearchResult:
     return result
 
 
-def run_web_searcher(query: str, num_results: int = 5) -> dict[str, Any]:
+def run_web_searcher(query: str, num_results: int = 10) -> dict[str, Any]:
     from artifactforge.tools.research.async_compat import run_async_safely
 
     result = run_async_safely(_search_with_fallback(query, num_results))

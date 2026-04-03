@@ -41,7 +41,7 @@ class Context7SearchInput(BaseModel):
         description="Library name (e.g., 'react', 'next.js', 'prisma')"
     )
     query: str = Field(description="The documentation query")
-    num_results: int = Field(default=5, description="Number of results")
+    num_results: int = Field(default=10, description="Number of results")
 
 
 async def _resolve_library_id(library: str) -> str | None:
@@ -73,7 +73,7 @@ async def _resolve_library_id(library: str) -> str | None:
 
 
 async def _search_context7_api(
-    library: str, query: str, num_results: int = 5
+    library: str, query: str, num_results: int = 10
 ) -> Context7SearchResult:
     """Search using Context7 API."""
 
@@ -147,7 +147,7 @@ async def _search_context7_api(
 
 
 @tool(args_schema=Context7SearchInput)
-def context7_searcher(library: str, query: str, num_results: int = 5) -> dict[str, Any]:
+def context7_searcher(library: str, query: str, num_results: int = 10) -> dict[str, Any]:
     """Search library documentation using Context7.
 
     Retrieves up-to-date documentation and code examples for popular libraries
@@ -174,7 +174,7 @@ def context7_searcher(library: str, query: str, num_results: int = 5) -> dict[st
 
 
 def run_context7_searcher(
-    library: str, query: str, num_results: int = 5
+    library: str, query: str, num_results: int = 10
 ) -> dict[str, Any]:
     """Run Context7 search synchronously."""
     import asyncio

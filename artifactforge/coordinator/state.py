@@ -112,9 +112,10 @@ class MCRSState(TypedDict):
     release_decision: Optional[mcrs_artifacts.ReleaseDecision]
 
     # =========================================================================
-    # Revision Tracking (prevents infinite loops)
+    # Revision Tracking (adaptive — quality-driven loop control)
     # =========================================================================
     revision_history: list[dict]
+    revision_quality_history: list[dict]  # Quality snapshots per revision for adaptive control
     current_stage: str  # Set by @trace_node decorator; read by _repair_context_for_node
 
     # =========================================================================
@@ -132,7 +133,19 @@ class MCRSState(TypedDict):
     trace_id: Optional[str]
     artifact_id: Optional[str]  # DB artifact row ID, set by persistence adapter
     learnings_context: Optional[dict[str, Any]]  # Injected from prior runs
+    applied_learning_ids: list[str]  # IDs of learnings injected this run (for outcome tracking)
     repair_context: Optional[dict[str, Any]]
+
+    # =========================================================================
+    # Time Budget (optional — None means unlimited)
+    # =========================================================================
+    time_budget_seconds: Optional[int]
+    pipeline_start_time: Optional[float]
+
+    # =========================================================================
+    # Resume support (ephemeral — never persisted to disk)
+    # =========================================================================
+    _resumed_nodes: Optional[set[str]]  # Output keys loaded from disk; consumed on skip
 
     # =========================================================================
     # Phase 11: Visual Design

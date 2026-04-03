@@ -12,6 +12,33 @@ from artifactforge.observability.middleware import emit_status, get_trace_id
 
 logger = logging.getLogger(__name__)
 
+MAX_CONTENT_CHARS = 30000
+
+
+def _extract_text(html: str, url: str) -> str:
+    """Extract clean text from HTML using trafilatura, with raw-text fallback."""
+    try:
+        import trafilatura
+
+        text = trafilatura.extract(
+            html,
+            url=url,
+            include_comments=False,
+            include_tables=True,
+            favor_recall=True,
+        )
+        if text and len(text) >= 50:
+            return text[:MAX_CONTENT_CHARS]
+    except Exception as e:
+        logger.debug(f"trafilatura extraction failed for {url}: {e}")
+
+    # Fallback: strip HTML tags with a simple regex
+    import re
+
+    raw = re.sub(r"<[^>]+>", " ", html)
+    raw = re.sub(r"\s+", " ", raw).strip()
+    return raw[:MAX_CONTENT_CHARS] if raw else ""
+
 
 class FetchResult(BaseModel):
     """Result of fetching a URL."""
@@ -30,7 +57,7 @@ class DeepAnalyzeInput(BaseModel):
 
 
 async def _fetch_url_content(url: str) -> FetchResult:
-    """Fetch content from a URL with proper error handling."""
+    """Fetch content from a URL and extract clean text via trafilatura."""
     emit_status(
         f"Fetching source {url[:80]}",
         trace_id=get_trace_id(),
@@ -41,12 +68,17 @@ async def _fetch_url_content(url: str) -> FetchResult:
         async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
             response = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
             response.raise_for_status()
-            text = response.text
-            if len(text) < 100:
+            html = response.text
+            if len(html) < 100:
                 return FetchResult(
                     url=url, success=False, error="Content too short (<100 chars)"
                 )
-            return FetchResult(url=url, content=text[:10000])
+            text = _extract_text(html, url)
+            if not text:
+                return FetchResult(
+                    url=url, success=False, error="No text extracted from page"
+                )
+            return FetchResult(url=url, content=text)
     except httpx.HTTPStatusError as e:
         logger.warning(f"HTTP error fetching {url}: {e.response.status_code}")
         return FetchResult(
@@ -71,7 +103,7 @@ def _analyze_content(
         user_prompt=(
             f"Analyze the following web content for the query: {query}\n\n"
             f"Sources: {', '.join(sources)}\n\n"
-            f"Content:\n{content[:8000]}\n\n"
+            f"Content:\n{content[:20000]}\n\n"
             "Provide:\n1. Key findings (3-5 bullet points)\n2. A brief summary"
         ),
         agent_name="deep_analyzer",

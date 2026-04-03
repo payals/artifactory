@@ -32,12 +32,20 @@ Your job is to write a complete draft while preserving epistemic integrity.
 - Include section anchors for visual_elements from the blueprint
 - Format frameworks (SWOT, PESTLE, etc.) as structured grids or tables, not prose
 
+## Section Data Requirements
+When the blueprint includes section_data_requirements, check each section's required_data against the claim ledger and analysis. For each requirement:
+- If the data EXISTS in claims/analysis: use the exact figures, cite the source
+- If the data is MISSING: use hedged language in the body (e.g. "available data suggests..." or "while specific figures were not identified...") and note the gap for the appendix. Do NOT insert inline warnings, banners, or "Data Gap Notice" blocks.
+- Follow the specificity guidance for each section
+- Apply the required_frameworks as structured formats (tables, matrices, scenario models)
+
 ## What NOT to Do
 - Do NOT invent unsupported claims
 - Do NOT upgrade assumptions to facts
 - Do NOT remove uncertainty for style
 - Do NOT deviate from blueprint
 - Do NOT present tabular data as prose paragraphs
+- Do NOT write generic ranges (e.g. "25-40%") when specific data exists or when the blueprint demands exact figures
 
 ## Input Context
 You receive:
@@ -45,6 +53,11 @@ You receive:
 - Claim Ledger (all classified claims)
 - Analytical Backbone (reasoning, risks, recommendations)
 - Content Blueprint (structure, flow, takeaways)
+
+## Data Gap Handling
+At the END of the draft, include a section titled "## Research Limitations & Data Gaps" that lists all data points that were unavailable or unverifiable. Each item should briefly state what data was sought and why it matters.
+This keeps the body clean and readable while being transparent about limitations.
+Do NOT insert inline "Data Gap Notice", "⚠️ Warning", or similar banners anywhere in the body sections.
 
 ## Output
 Return the complete draft as a string (markdown format).
@@ -59,18 +72,9 @@ def run_draft_writer(
     content_blueprint: dict[str, Any],
     repair_context: dict[str, Any] | None = None,
     learnings_context: dict[str, Any] | None = None,
+    taper_context: str | None = None,
 ) -> str:
-    """Run draft writer to generate complete draft.
-
-    Args:
-        execution_brief: Output from Intent Architect
-        claim_ledger: Classified claims from Evidence Ledger
-        analytical_backbone: Output from Analyst
-        content_blueprint: Structure from Output Strategist
-
-    Returns:
-        Draft content as string
-    """
+    """Run draft writer to generate complete draft."""
     prompt = _build_draft_prompt(
         execution_brief,
         claim_ledger,
@@ -79,7 +83,10 @@ def run_draft_writer(
         repair_context,
         learnings_context,
     )
-    result = _call_llm(system=DRAFT_WRITER_SYSTEM, prompt=prompt)
+    system = DRAFT_WRITER_SYSTEM
+    if taper_context:
+        system += f"\n\n## {taper_context}\nAddress only the most critical repair issues. Produce a polished, final-quality draft."
+    result = _call_llm(system=system, prompt=prompt)
     return _strip_markdown_fence(result)
 
 
@@ -101,14 +108,18 @@ def _build_draft_prompt(
         indent=2,
     )
 
-    blueprint_json = json.dumps(
-        {
-            "structure": blueprint.get("structure", []),
-            "key_takeaways": blueprint.get("key_takeaways", []),
-            "visual_elements": blueprint.get("visual_elements", []),
-        },
-        indent=2,
-    )
+    blueprint_data = {
+        "structure": blueprint.get("structure", []),
+        "key_takeaways": blueprint.get("key_takeaways", []),
+        "visual_elements": blueprint.get("visual_elements", []),
+    }
+    blueprint_json = json.dumps(blueprint_data, indent=2)
+
+    # Include section data requirements if present
+    data_reqs = blueprint.get("section_data_requirements")
+    data_reqs_text = ""
+    if data_reqs:
+        data_reqs_text = "\n## Section Data Requirements\n" + json.dumps(data_reqs, indent=2)
 
     claims_text = ""
     if claims.get("claims"):
@@ -141,12 +152,13 @@ def _build_draft_prompt(
 
 ## Blueprint
 {blueprint_json}
+{data_reqs_text}
 {claims_text}
 {analysis_text}
 {repair_text}
 {learnings_text}
 
-Write the complete draft following the blueprint exactly. Preserve epistemic status of all claims."""
+Write the complete draft following the blueprint exactly. Preserve epistemic status of all claims. For each section, check its data requirements and use exact figures where available. Where data is missing, use hedged language in the body and collect all gaps into a final "Research Limitations & Data Gaps" section. Do NOT insert inline data gap warnings or banners."""
 
 
 def _strip_markdown_fence(text: str) -> str:

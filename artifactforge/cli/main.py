@@ -6,6 +6,7 @@ import logging
 import re
 import shutil
 import subprocess
+import time
 from datetime import date
 from importlib import import_module
 from pathlib import Path
@@ -352,7 +353,10 @@ def ask_clarification_questions(questions: list, description: str) -> dict[str, 
 
 
 async def generate_with_clarification(
-    description: str, output_type: str, skip_proceed_prompt: bool = False
+    description: str,
+    output_type: str,
+    skip_proceed_prompt: bool = False,
+    timeout_minutes: Optional[int] = None,
 ) -> dict:
     """Generate with optional clarification questions."""
     from artifactforge.agents.intent_architect import generate_clarification_questions
@@ -360,13 +364,13 @@ async def generate_with_clarification(
     if not skip_proceed_prompt:
         proceed_mode = ask_proceed_mode()
         if proceed_mode == "auto":
-            return await _run_pipeline(description, output_type, intent_mode="auto")
+            return await _run_pipeline(description, output_type, intent_mode="auto", timeout_minutes=timeout_minutes)
 
     questions = generate_clarification_questions(description, output_type)
 
     if not questions:
         print("Could not generate questions, proceeding with auto mode")
-        return await _run_pipeline(description, output_type, intent_mode="auto")
+        return await _run_pipeline(description, output_type, intent_mode="auto", timeout_minutes=timeout_minutes)
 
     answers = ask_clarification_questions(questions, description)
 
@@ -382,7 +386,45 @@ Additional context from user:
         output_type,
         intent_mode="interactive",
         answers_collected=answers,
+        timeout_minutes=timeout_minutes,
     )
+
+
+def _load_resumed_state(resume_trace_id: str) -> dict:
+    """Load pipeline state from a previous run's disk dump."""
+    import json as _json
+
+    state_file = OUTPUTS_DIR / resume_trace_id / "state_latest.json"
+    if not state_file.exists():
+        # Try to find partial state files
+        run_dir = OUTPUTS_DIR / resume_trace_id
+        if not run_dir.exists():
+            available = sorted(
+                (d.name for d in OUTPUTS_DIR.iterdir() if d.is_dir() and len(d.name) == 36),
+            )
+            hint = "\n  ".join(available[-10:]) if available else "(none)"
+            raise FileNotFoundError(
+                f"No state found for trace {resume_trace_id}.\n"
+                f"Available runs:\n  {hint}"
+            )
+        # Use the most recently modified state_after_*.json
+        state_files = sorted(run_dir.glob("state_after_*.json"), key=lambda p: p.stat().st_mtime)
+        if not state_files:
+            raise FileNotFoundError(f"No state files in {run_dir}")
+        state_file = state_files[-1]
+
+    loaded = _json.loads(state_file.read_text())
+
+    # Build _resumed_nodes: output keys that have non-None values
+    from artifactforge.observability.middleware import _NODE_OUTPUT_KEY
+
+    resumed_keys = {
+        output_key
+        for output_key in _NODE_OUTPUT_KEY.values()
+        if loaded.get(output_key) is not None
+    }
+    loaded["_resumed_nodes"] = resumed_keys
+    return loaded
 
 
 async def _run_pipeline(
@@ -390,6 +432,8 @@ async def _run_pipeline(
     output_type: str,
     intent_mode: str = "auto",
     answers_collected: Optional[dict] = None,
+    resume_trace_id: Optional[str] = None,
+    timeout_minutes: Optional[int] = None,
 ) -> dict:
     """Generate an artifact using the MCRS pipeline."""
     import uuid
@@ -403,8 +447,18 @@ async def _run_pipeline(
 
     from artifactforge.db.persistence import get_persistence
 
+    # ------------------------------------------------------------------
+    # Resume: load state from disk
+    # ------------------------------------------------------------------
+    resumed_state: dict | None = None
+    if resume_trace_id:
+        resumed_state = _load_resumed_state(resume_trace_id)
+        print(f"\n  Resuming run {resume_trace_id}")
+        skipped = resumed_state.get("_resumed_nodes", set())
+        print(f"  Loaded {len(skipped)} completed node(s): {', '.join(sorted(skipped))}\n")
+
     emitter = get_event_emitter()
-    trace_id = str(uuid.uuid4())
+    trace_id = resume_trace_id or str(uuid.uuid4())
     emitter.emit_pipeline_start(trace_id, description, output_type)
 
     metrics = get_metrics_collector()
@@ -416,31 +470,69 @@ async def _run_pipeline(
     artifact_id = persistence.start_run(trace_id, description, output_type)
 
     # Fetch learnings from prior runs for this artifact type
-    learnings_context = persistence.fetch_learnings(
+    learnings_context, applied_learning_ids = persistence.fetch_learnings(
         agent_name="pipeline", artifact_type=output_type
     )
 
-    initial_state = {
-        "user_prompt": description,
-        "conversation_context": None,
-        "output_constraints": {"output_type": output_type},
-        "revision_history": [],
-        "current_stage": "",
-        "errors": [],
-        "stage_timing": {},
-        "intent_mode": intent_mode,
-        "answers_collected": answers_collected or {},
-        "trace_id": trace_id,
-        "artifact_id": artifact_id,
-        "learnings_context": learnings_context,
-        "repair_context": None,
-    }
+    # Register prompt snapshot callback — captures every LLM call to DB
+    if persistence.enabled:
+        from artifactforge.agents.llm_gateway import register_callback, LLMCall
+        from artifactforge.observability.middleware import get_trace_id
+
+        def _snapshot_callback(call: LLMCall) -> None:
+            if not call.response.success:
+                return
+            persistence.persist_prompt_snapshot(
+                artifact_id=get_trace_id() or artifact_id,
+                agent_name=call.request.agent_name or "unknown",
+                system_prompt=call.request.system_prompt,
+                user_prompt=call.request.user_prompt,
+                response_text=call.response.raw_response,
+                response_tokens=call.response.output_tokens or 0,
+                model=call.request.model,
+                temperature=call.request.temperature,
+                duration_ms=call.response.duration_ms,
+                learnings_context=learnings_context,
+            )
+
+        register_callback(_snapshot_callback)
+
+    if resumed_state:
+        # Merge resume state with fresh metadata
+        initial_state = {
+            **resumed_state,
+            "trace_id": trace_id,
+            "artifact_id": artifact_id,
+            "learnings_context": learnings_context,
+            "applied_learning_ids": applied_learning_ids,
+        }
+    else:
+        initial_state = {
+            "user_prompt": description,
+            "conversation_context": None,
+            "output_constraints": {"output_type": output_type},
+            "revision_history": [],
+            "current_stage": "",
+            "errors": [],
+            "stage_timing": {},
+            "intent_mode": intent_mode,
+            "answers_collected": answers_collected or {},
+            "trace_id": trace_id,
+            "artifact_id": artifact_id,
+            "learnings_context": learnings_context,
+            "applied_learning_ids": applied_learning_ids,
+            "repair_context": None,
+            "time_budget_seconds": timeout_minutes * 60 if timeout_minutes else None,
+            "pipeline_start_time": time.time() if timeout_minutes else None,
+        }
 
     logger.info("Starting MCRS pipeline for %s (%s)", description, output_type)
+    print(f"  Run ID: {trace_id}")
+    print(f"  Resume with: artifactforge generate \"...\" --resume {trace_id}\n")
 
     result = await cast(Any, app).ainvoke(
         initial_state,
-        config={"configurable": {"thread_id": "cli-session", "trace_id": trace_id}},
+        config={"configurable": {"thread_id": trace_id, "trace_id": trace_id}},
     )
 
     from artifactforge.observability.events import get_event_emitter
@@ -490,8 +582,150 @@ async def _run_pipeline(
         red_team_review=result.get("red_team_review"),
     )
 
+    # Close the feedback loop: update confidence of learnings that were applied this run
+    applied_ids = result.get("applied_learning_ids", [])
+    if applied_ids:
+        persistence.update_learnings_outcome(
+            learning_ids=applied_ids,
+            success=(run_status == "completed"),
+        )
+
     logger.info("Pipeline complete at stage %s", result.get("current_stage"))
     return result
+
+
+def _handle_prompts_command(args) -> None:
+    """Handle prompt snapshot subcommands."""
+    from artifactforge.db.persistence import get_persistence
+
+    persistence = get_persistence()
+
+    if not persistence.enabled:
+        print("Database not configured. Set DATABASE_URL in .env.")
+        return
+
+    cmd = getattr(args, "prompts_command", None)
+
+    if cmd == "list":
+        snapshots = persistence.list_prompt_snapshots(
+            artifact_id=args.run, agent_name=args.agent, limit=args.limit,
+        )
+        if not snapshots:
+            print("No prompt snapshots found.")
+            return
+        print(f"{'Agent':<25} {'Model':<25} {'Sys':>5} {'User':>6} {'Resp':>5} {'ms':>7} {'Score':>5} {'Learn':>5} {'Created'}")
+        print("-" * 120)
+        for s in snapshots:
+            agent = (s["agent_name"] or "")[:24]
+            model = (s["model"] or "")[:24]
+            sys_len = f"{s['system_prompt_len']//1000}k" if s["system_prompt_len"] > 999 else str(s["system_prompt_len"])
+            user_len = f"{s['user_prompt_len']//1000}k" if s["user_prompt_len"] > 999 else str(s["user_prompt_len"])
+            resp = str(s["response_tokens"] or 0)
+            ms = f"{s['duration_ms']:.0f}" if s["duration_ms"] else "-"
+            score = f"{s['quality_score']:.2f}" if s["quality_score"] is not None else "-"
+            learn = "Yes" if s["has_learnings"] else "-"
+            created = (s["created_at"] or "")[:19]
+            print(f"{agent:<25} {model:<25} {sys_len:>5} {user_len:>6} {resp:>5} {ms:>7} {score:>5} {learn:>5} {created}")
+        print(f"\n{len(snapshots)} snapshots")
+
+    elif cmd == "show":
+        snapshot = persistence.get_prompt_snapshot(args.id)
+        if not snapshot:
+            print(f"Snapshot {args.id} not found.")
+            return
+        print(f"Agent: {snapshot['agent_name']}")
+        print(f"Model: {snapshot['model']}")
+        print(f"Quality Score: {snapshot['quality_score']}")
+        print(f"Duration: {snapshot['duration_ms']:.0f}ms" if snapshot["duration_ms"] else "")
+        print(f"Learnings Injected: {'Yes' if snapshot['learnings_injected'] else 'No'}")
+        print(f"\n{'='*60} SYSTEM PROMPT {'='*60}")
+        print(snapshot["system_prompt"])
+        print(f"\n{'='*60} USER PROMPT {'='*60}")
+        print(snapshot["user_prompt"])
+        if snapshot["response_text"]:
+            print(f"\n{'='*60} RESPONSE (first 2000 chars) {'='*60}")
+            print(snapshot["response_text"])
+
+    elif cmd == "diff":
+        snap_a = persistence.list_prompt_snapshots(artifact_id=args.run_a, agent_name=args.agent, limit=1)
+        snap_b = persistence.list_prompt_snapshots(artifact_id=args.run_b, agent_name=args.agent, limit=1)
+
+        if not snap_a:
+            print(f"No snapshot found for agent={args.agent} in run {args.run_a}")
+            return
+        if not snap_b:
+            print(f"No snapshot found for agent={args.agent} in run {args.run_b}")
+            return
+
+        full_a = persistence.get_prompt_snapshot(snap_a[0]["id"])
+        full_b = persistence.get_prompt_snapshot(snap_b[0]["id"])
+
+        import difflib
+
+        for label, key in [("SYSTEM PROMPT", "system_prompt"), ("USER PROMPT", "user_prompt")]:
+            lines_a = (full_a[key] or "").splitlines(keepends=True)
+            lines_b = (full_b[key] or "").splitlines(keepends=True)
+            diff = list(difflib.unified_diff(lines_a, lines_b, fromfile=f"run_a/{args.agent}", tofile=f"run_b/{args.agent}", n=2))
+            if diff:
+                print(f"\n{'='*40} {label} DIFF {'='*40}")
+                print("".join(diff))
+            else:
+                print(f"\n{label}: identical across both runs")
+
+    else:
+        print("Usage: artifactforge prompts {list|show|diff}")
+
+
+def _handle_learnings_command(args) -> None:
+    """Handle learnings management subcommands."""
+    from artifactforge.db.persistence import get_persistence
+
+    persistence = get_persistence()
+
+    if not persistence.enabled:
+        print("Database not configured. Set DATABASE_URL in .env.")
+        return
+
+    cmd = getattr(args, "learnings_command", None)
+
+    if cmd == "list":
+        learnings = persistence.list_learnings(artifact_type=args.type)
+        if not learnings:
+            print("No learnings found.")
+            return
+        print(f"{'ID':<38} {'Conf':>5} {'Applied':>7} {'Success':>7} {'Valid':>5} {'Source':<20} {'Failure Mode'}")
+        print("-" * 130)
+        for l in learnings:
+            lid = l["id"][:36]
+            conf = f"{l['confidence']:.0%}"
+            applied = str(l["times_applied"])
+            succeeded = str(l["times_succeeded"])
+            valid = "Yes" if l["is_validated"] else "-"
+            source = l["source"][:20]
+            failure = l["failure_mode"][:60]
+            print(f"{lid:<38} {conf:>5} {applied:>7} {succeeded:>7} {valid:>5} {source:<20} {failure}")
+        print(f"\n{len(learnings)} learnings total")
+
+    elif cmd == "validate":
+        ok = persistence.validate_learning(args.id, validated=True)
+        if ok:
+            print(f"Learning {args.id} validated. Confidence boosted.")
+        else:
+            print(f"Learning {args.id} not found.")
+
+    elif cmd == "invalidate":
+        ok = persistence.validate_learning(args.id, validated=False)
+        if ok:
+            print(f"Learning {args.id} invalidated. Confidence set to 0.")
+        else:
+            print(f"Learning {args.id} not found.")
+
+    elif cmd == "prune":
+        count = persistence.prune_learnings()
+        print(f"Pruned {count} deprecated learnings.")
+
+    else:
+        print("Usage: artifactforge learnings {list|validate|invalidate|prune}")
 
 
 def main():
@@ -521,16 +755,67 @@ def main():
         action="store_true",
         help="Run automatically without questions",
     )
+    gen_parser.add_argument(
+        "--resume",
+        "-r",
+        metavar="TRACE_ID",
+        default=None,
+        help="Resume a previous pipeline run from its last checkpoint",
+    )
+    gen_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        metavar="MINUTES",
+        help="Max minutes for pipeline (adapts quality vs speed; 0=unlimited)",
+    )
+
+    # Learnings management subcommands
+    learn_parser = subparsers.add_parser("learnings", help="Manage pipeline learnings")
+    learn_sub = learn_parser.add_subparsers(dest="learnings_command")
+
+    ls_parser = learn_sub.add_parser("list", help="List all learnings")
+    ls_parser.add_argument("--type", default=None, help="Filter by artifact type")
+
+    val_parser = learn_sub.add_parser("validate", help="Mark a learning as validated")
+    val_parser.add_argument("id", help="Learning ID (UUID)")
+
+    inval_parser = learn_sub.add_parser("invalidate", help="Mark a learning as invalid")
+    inval_parser.add_argument("id", help="Learning ID (UUID)")
+
+    learn_sub.add_parser("prune", help="Remove deprecated/expired learnings")
+
+    # Prompt snapshot subcommands
+    prompt_parser = subparsers.add_parser("prompts", help="View prompt snapshots")
+    prompt_sub = prompt_parser.add_subparsers(dest="prompts_command")
+
+    pls_parser = prompt_sub.add_parser("list", help="List prompt snapshots")
+    pls_parser.add_argument("--run", default=None, help="Filter by artifact/run ID")
+    pls_parser.add_argument("--agent", default=None, help="Filter by agent name")
+    pls_parser.add_argument("--limit", type=int, default=20, help="Max results")
+
+    pshow_parser = prompt_sub.add_parser("show", help="Show full prompt snapshot")
+    pshow_parser.add_argument("id", help="Snapshot ID (UUID)")
+
+    pdiff_parser = prompt_sub.add_parser("diff", help="Diff prompts for an agent across two runs")
+    pdiff_parser.add_argument("agent", help="Agent name (e.g. draft_writer)")
+    pdiff_parser.add_argument("run_a", help="First run/artifact ID")
+    pdiff_parser.add_argument("run_b", help="Second run/artifact ID")
 
     args = parser.parse_args()
 
     if args.command == "generate":
-        if args.auto:
-            result = asyncio.run(_run_pipeline(args.description, args.type))
+        timeout = args.timeout if args.timeout else None
+        if args.resume:
+            result = asyncio.run(
+                _run_pipeline(args.description, args.type, resume_trace_id=args.resume, timeout_minutes=timeout)
+            )
+        elif args.auto:
+            result = asyncio.run(_run_pipeline(args.description, args.type, timeout_minutes=timeout))
         else:
             result = asyncio.run(
                 generate_with_clarification(
-                    args.description, args.type, skip_proceed_prompt=args.interactive
+                    args.description, args.type, skip_proceed_prompt=args.interactive, timeout_minutes=timeout
                 )
             )
 
@@ -543,6 +828,12 @@ def main():
             print(content)
         else:
             print(result)
+
+    elif args.command == "learnings":
+        _handle_learnings_command(args)
+
+    elif args.command == "prompts":
+        _handle_prompts_command(args)
 
 
 if __name__ == "__main__":

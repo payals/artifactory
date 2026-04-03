@@ -38,11 +38,11 @@ class PerplexitySearchInput(BaseModel):
     """Input for Perplexity searcher."""
 
     query: str = Field(description="The search query")
-    num_results: int = Field(default=5, description="Number of results")
+    num_results: int = Field(default=10, description="Number of results")
 
 
 async def _search_perplexity_api(
-    query: str, num_results: int = 5
+    query: str, num_results: int = 10
 ) -> PerplexitySearchResult:
     """Search using Perplexity API."""
     if not PERPLEXITY_API_KEY:
@@ -65,7 +65,7 @@ async def _search_perplexity_api(
                         },
                         {"role": "user", "content": query},
                     ],
-                    "max_tokens": 1024,
+                    "max_tokens": 4096,
                     "temperature": 0.2,
                     "top_p": 0.9,
                     "return_images": False,
@@ -116,7 +116,7 @@ async def _search_perplexity_api(
 
 
 @tool(args_schema=PerplexitySearchInput)
-def perplexity_searcher(query: str, num_results: int = 5) -> dict[str, Any]:
+def perplexity_searcher(query: str, num_results: int = 10) -> dict[str, Any]:
     """Search the web using Perplexity AI for answers with citations.
 
     Provides AI-generated answers based on web search with source citations.
@@ -139,7 +139,7 @@ def perplexity_searcher(query: str, num_results: int = 5) -> dict[str, Any]:
     return result
 
 
-def run_perplexity_searcher(query: str, num_results: int = 5) -> dict[str, Any]:
+def run_perplexity_searcher(query: str, num_results: int = 10) -> dict[str, Any]:
     """Run Perplexity search synchronously."""
     import asyncio
 

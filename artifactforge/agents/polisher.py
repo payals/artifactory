@@ -17,6 +17,7 @@ Your job is to make content clearer and more scanable WITHOUT changing substance
 - Improve sentence flow
 - Better formatting
 - Add emphasis where appropriate
+- Consolidate data gap notices: if inline warnings like "Data Gap Notice", "⚠️", "data not found", or similar banners appear in the body, MOVE them to a "Research Limitations & Data Gaps" appendix at the end. Replace the inline notice with hedged natural language.
 
 ## Critical Constraints
 - NEVER change meaning of claims

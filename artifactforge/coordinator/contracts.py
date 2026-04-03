@@ -20,7 +20,7 @@ class AgentContract:
     required_output_schema: type  # Schema class for output
     forbidden_behaviors: list[str]
     pass_fail_criteria: list[str]
-    max_retries: int = 2
+    max_retries: int = 5
     output_is_list: bool = False
 
     # Runtime

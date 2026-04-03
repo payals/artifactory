@@ -25,7 +25,9 @@ class TestPipelinePersistence:
         p.record_evaluation("art-1", "reviewer", [], True)
         p.record_quality_gate("art-1", "gate", True)
         assert p.extract_learnings("art-1", "report", [], None, []) == 0
-        assert p.fetch_learnings("agent", "report") is None
+        context, ids = p.fetch_learnings("agent", "report")
+        assert context is None
+        assert ids == []
 
     @patch("artifactforge.db.persistence._get_session")
     def test_start_run_creates_artifact(self, mock_get_session):
@@ -217,18 +219,21 @@ class TestPipelinePersistence:
         mock_get_session.return_value = mock_session
 
         p = self._make_persistence(enabled=True)
-        result = p.fetch_learnings("draft_writer", "report")
+        context, ids = p.fetch_learnings("draft_writer", "report")
 
-        assert result is None
+        assert context is None
+        assert ids == []
 
     @patch("artifactforge.db.persistence._get_session")
     def test_fetch_learnings_returns_insights(self, mock_get_session):
-        """fetch_learnings should return formatted insights."""
+        """fetch_learnings should return formatted insights and learning IDs."""
         mock_learning = MagicMock()
+        mock_learning.id = uuid.uuid4()
         mock_learning.failure_mode = "unsupported_claim: Missing source"
         mock_learning.fix_applied = "Added source reference"
         mock_learning.confidence = 0.85
         mock_learning.source = "adversarial_review"
+        mock_learning.is_validated = False
         mock_learning.times_applied = 0
 
         mock_session = MagicMock()
@@ -241,13 +246,15 @@ class TestPipelinePersistence:
         mock_get_session.return_value = mock_session
 
         p = self._make_persistence(enabled=True)
-        result = p.fetch_learnings("draft_writer", "report")
+        context, ids = p.fetch_learnings("draft_writer", "report")
 
-        assert result is not None
-        assert result["agent"] == "draft_writer"
-        assert result["artifact_type"] == "report"
-        assert len(result["insights"]) == 1
-        assert result["insights"][0]["confidence"] == 0.85
+        assert context is not None
+        assert context["agent"] == "draft_writer"
+        assert context["artifact_type"] == "report"
+        assert len(context["insights"]) == 1
+        assert context["insights"][0]["confidence"] == 0.85
+        assert len(ids) == 1
+        assert ids[0] == str(mock_learning.id)
 
     def test_noop_with_empty_artifact_id(self):
         """Methods should no-op when artifact_id is empty."""

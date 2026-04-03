@@ -70,8 +70,42 @@ For blogs and slides, include them when data or comparisons are involved.
 - Do NOT bury key insights
 - Do NOT return empty visual_elements when the content has data, comparisons, or frameworks
 
+## Section Data Requirements (CRITICAL)
+For EACH section in the structure, specify what data and analytical frameworks it needs to be substantive.
+This prevents downstream agents from writing vague prose when specific data is available.
+
+"section_data_requirements": {
+  "Section Name": {
+    "required_data": ["list of specific data points this section needs"],
+    "required_frameworks": ["analytical frameworks to apply, e.g. 'competitive_matrix', 'risk_table', 'scenario_model'"],
+    "specificity": "guidance on precision level, e.g. 'Use exact figures with sources, not ranges'"
+  }
+}
+
+Examples of good required_data entries:
+- "population count with year" (not "demographics")
+- "competitor names and count by category" (not "competitive landscape")
+- "startup cost line items with dollar ranges" (not "financial analysis")
+- "API latency benchmarks from published tests" (not "performance data")
+- "relevant paper titles and key results" (not "academic research")
+
+Infer the right frameworks for the topic. Common patterns:
+- Business decisions: scenario_model, competitive_matrix, risk_severity_table
+- Technical comparisons: benchmark_table, feature_matrix, architecture_diagram
+- Policy analysis: stakeholder_matrix, impact_assessment, precedent_table
+- Research surveys: taxonomy, gap_analysis, timeline_of_developments
+
+## Scope Guidance (CRITICAL)
+When scope_guidance is present in the brief:
+- If min_items/max_items specify a count, design that many content sections for the core material
+  (e.g., if max_items=10 and the user asked for "10 ways", the structure MUST have ~10 distinct sections covering each way/strategy/item)
+- If breadth_preference is "broad", favor more sections with lighter depth over fewer deep sections
+- If breadth_preference is "deep", fewer sections with more analysis per section
+- NEVER produce fewer content sections than min_items when it is set
+- The user's quantity request is a hard requirement, not a suggestion
+
 ## Output Format
-Return JSON with structure (section headers), section_purposes, narrative_flow, visual_elements, key_takeaways, audience_guidance.
+Return JSON with structure, section_purposes, narrative_flow, visual_elements, key_takeaways, audience_guidance, section_data_requirements.
 """
 
 
@@ -105,6 +139,7 @@ def run_output_strategist(
             visual_elements=parsed.get("visual_elements", []),
             key_takeaways=parsed.get("key_takeaways", []),
             audience_guidance=parsed.get("audience_guidance", []),
+            section_data_requirements=parsed.get("section_data_requirements"),
         )
     except (json.JSONDecodeError, KeyError):
         return _create_default_blueprint(execution_brief)
@@ -122,6 +157,7 @@ def _build_strategy_prompt(
             "audience": brief.get("audience", "general"),
             "tone": brief.get("tone", "professional"),
             "user_goal": brief.get("user_goal", ""),
+            "scope_guidance": brief.get("scope_guidance"),
         },
         indent=2,
     )
@@ -137,13 +173,17 @@ def _build_strategy_prompt(
                 indent=2,
             )
         else:
+            scope = brief.get("scope_guidance") or {}
+            max_items = scope.get("max_items") or 10
+            finding_limit = max(5, max_items)
+            risk_limit = max(3, max_items // 2)
             analysis_summary = json.dumps(
                 {
-                    "key_findings": (analysis.get("key_findings") or [])[:5],
-                    "risks": (analysis.get("risks") or [])[:3],
+                    "key_findings": (analysis.get("key_findings") or [])[:finding_limit],
+                    "risks": (analysis.get("risks") or [])[:risk_limit],
                     "recommendation_logic": (
                         analysis.get("recommendation_logic") or []
-                    )[:3],
+                    )[:risk_limit],
                 },
                 indent=2,
             )
@@ -196,6 +236,7 @@ def _create_default_blueprint(brief: dict) -> schemas.ContentBlueprint:
         visual_elements=[],
         key_takeaways=[],
         audience_guidance=[],
+        section_data_requirements=None,
     )
 
 

@@ -229,15 +229,30 @@ class TestDeepAnalyzer:
     """Tests for artifactforge.tools.research.deep_analyzer."""
 
     @pytest.mark.asyncio
-    async def test_fetch_url_content_success(self, monkeypatch) -> None:
-        long_text = "x" * 200
-        mock = MockAsyncClient(response=MockResponse(text=long_text))
+    async def test_fetch_url_content_html_extraction(self, monkeypatch) -> None:
+        html = "<html><body><article><p>This is the main article content that should be extracted cleanly by trafilatura.</p></article></body></html>"
+        mock = MockAsyncClient(response=MockResponse(text=html))
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: mock)
 
         result = await da_mod._fetch_url_content("https://example.com")
 
         assert result.success is True
-        assert result.content == long_text
+        # Content should be clean text, not raw HTML tags
+        assert "<html>" not in result.content
+        assert "<body>" not in result.content
+        assert len(result.content) > 0
+
+    @pytest.mark.asyncio
+    async def test_fetch_url_content_plain_text_fallback(self, monkeypatch) -> None:
+        """When content has no HTML structure, regex fallback strips tags and returns text."""
+        plain = "x" * 200
+        mock = MockAsyncClient(response=MockResponse(text=plain))
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: mock)
+
+        result = await da_mod._fetch_url_content("https://example.com")
+
+        assert result.success is True
+        assert len(result.content) > 0
 
     @pytest.mark.asyncio
     async def test_fetch_url_content_too_short(self, monkeypatch) -> None:
@@ -280,6 +295,33 @@ class TestDeepAnalyzer:
 
         assert result["key_findings"] == []
         assert "failed" in result["summary"].lower()
+
+    def test_extract_text_html_cleans_tags(self) -> None:
+        html = "<html><head><title>Test</title></head><body><nav>Menu</nav><article><p>Important content here.</p></article><footer>Footer</footer></body></html>"
+        text = da_mod._extract_text(html, "https://example.com")
+        assert "<" not in text
+        assert len(text) > 0
+
+    def test_extract_text_respects_max_content(self) -> None:
+        huge_html = "<p>" + ("word " * 100000) + "</p>"
+        text = da_mod._extract_text(huge_html, "https://example.com")
+        assert len(text) <= da_mod.MAX_CONTENT_CHARS
+
+    def test_extract_text_trafilatura_import_failure(self, monkeypatch) -> None:
+        """Falls back to regex when trafilatura is unavailable."""
+        import builtins
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "trafilatura":
+                raise ImportError("no trafilatura")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+        html = "<p>Fallback content should work</p>"
+        text = da_mod._extract_text(html, "https://example.com")
+        assert "Fallback content should work" in text
+        assert "<p>" not in text
 
 
 # =============================================================================

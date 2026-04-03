@@ -37,17 +37,17 @@ class ExaSearchInput(BaseModel):
     """Input for Exa searcher."""
 
     query: str = Field(description="The search query")
-    num_results: int = Field(default=5, description="Number of results")
+    num_results: int = Field(default=10, description="Number of results")
 
 
 class ExaSimilarInput(BaseModel):
     """Input for Exa similar content search."""
 
     url: str = Field(description="URL to find similar content to")
-    num_results: int = Field(default=5, description="Number of similar results")
+    num_results: int = Field(default=10, description="Number of similar results")
 
 
-async def _search_exa_api(query: str, num_results: int = 5) -> ExaSearchResult:
+async def _search_exa_api(query: str, num_results: int = 10) -> ExaSearchResult:
     """Search using Exa API."""
     if not EXA_API_KEY:
         return ExaSearchResult(
@@ -104,7 +104,7 @@ async def _search_exa_api(query: str, num_results: int = 5) -> ExaSearchResult:
         return ExaSearchResult(success=False, query=query, error=str(e))
 
 
-async def _find_similar_exa(url: str, num_results: int = 5) -> ExaSearchResult:
+async def _find_similar_exa(url: str, num_results: int = 10) -> ExaSearchResult:
     """Find similar content using Exa API."""
     if not EXA_API_KEY:
         return ExaSearchResult(
@@ -162,7 +162,7 @@ async def _find_similar_exa(url: str, num_results: int = 5) -> ExaSearchResult:
 
 
 @tool(args_schema=ExaSearchInput)
-def exa_searcher(query: str, num_results: int = 5) -> dict[str, Any]:
+def exa_searcher(query: str, num_results: int = 10) -> dict[str, Any]:
     """Search the web using Exa AI semantic search.
 
     Uses embeddings-based neural search for finding semantically relevant content.
@@ -186,7 +186,7 @@ def exa_searcher(query: str, num_results: int = 5) -> dict[str, Any]:
 
 
 @tool(args_schema=ExaSimilarInput)
-def exa_similar_finder(url: str, num_results: int = 5) -> dict[str, Any]:
+def exa_similar_finder(url: str, num_results: int = 10) -> dict[str, Any]:
     """Find similar content to a given URL using Exa AI.
 
     Discovers content semantically similar to the provided URL.
@@ -209,7 +209,7 @@ def exa_similar_finder(url: str, num_results: int = 5) -> dict[str, Any]:
     return result
 
 
-def run_exa_searcher(query: str, num_results: int = 5) -> dict[str, Any]:
+def run_exa_searcher(query: str, num_results: int = 10) -> dict[str, Any]:
     """Run Exa search synchronously."""
     import asyncio
 
@@ -228,7 +228,7 @@ def run_exa_searcher(query: str, num_results: int = 5) -> dict[str, Any]:
     }
 
 
-def run_exa_similar_finder(url: str, num_results: int = 5) -> dict[str, Any]:
+def run_exa_similar_finder(url: str, num_results: int = 10) -> dict[str, Any]:
     """Run Exa similar search synchronously."""
     import asyncio
 

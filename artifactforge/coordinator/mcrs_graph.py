@@ -1,5 +1,6 @@
 """MCRS LangGraph - 13-node multi-agent content reasoning pipeline."""
 
+import time as _time
 from pathlib import Path
 from typing import Any, Literal, Optional, cast
 
@@ -11,7 +12,11 @@ from artifactforge.observability.events import get_event_emitter
 from artifactforge.observability.middleware import trace_node
 
 
-MAX_REVISIONS = 3
+# Adaptive revision control constants
+HARD_CEILING = 10        # Absolute max revisions — safety valve, never exceeded
+STALL_PATIENCE = 2       # Stop if quality hasn't improved for this many consecutive revisions
+TAPER_AFTER = 5          # After this many revisions, inject "finalize" signals into agent prompts
+
 RepairLocus = Literal[
     "intent_architect",
     "research_lead",
@@ -97,6 +102,139 @@ def _repair_context_for_node(
         "release_decision": decision or None,
         "revision_count": len(state.get("revision_history", [])),
     }
+
+
+def _compute_quality_snapshot(state: MCRSState) -> dict[str, Any]:
+    """Compute a quality snapshot from current review/verification/arbiter state."""
+    issues = _review_issues(state)
+    items = _verification_items(state)
+    decision = cast(dict[str, Any], state.get("release_decision") or {})
+
+    high_count = sum(1 for i in issues if i.get("severity") == "HIGH")
+    medium_count = sum(1 for i in issues if i.get("severity") == "MEDIUM")
+    unsupported_count = sum(1 for i in items if i.get("status") == "UNSUPPORTED")
+    confidence = decision.get("confidence", 0.0)
+    if not isinstance(confidence, (int, float)):
+        confidence = 0.0
+
+    # Composite score: fewer issues + higher confidence = better
+    score = max(0.0, 1.0 - (high_count * 0.3) - (medium_count * 0.1) - (unsupported_count * 0.2))
+    # Blend in arbiter confidence when available
+    if confidence > 0:
+        score = (score + confidence) / 2
+
+    return {
+        "revision": len(state.get("revision_history", [])),
+        "high_issues": high_count,
+        "medium_issues": medium_count,
+        "unsupported_claims": unsupported_count,
+        "confidence": confidence,
+        "score": round(score, 3),
+    }
+
+
+def _is_quality_improving(quality_history: list[dict]) -> bool:
+    """Check if quality improved in the most recent revision."""
+    if len(quality_history) < 2:
+        return True  # Not enough data — assume improving
+    return quality_history[-1].get("score", 0) > quality_history[-2].get("score", 0)
+
+
+def _stall_count(quality_history: list[dict]) -> int:
+    """Count consecutive non-improving revisions from the end."""
+    if len(quality_history) < 2:
+        return 0
+    count = 0
+    for i in range(len(quality_history) - 1, 0, -1):
+        if quality_history[i].get("score", 0) <= quality_history[i - 1].get("score", 0):
+            count += 1
+        else:
+            break
+    return count
+
+
+def _should_continue_revising(state: MCRSState) -> bool:
+    """Adaptive decision: should the pipeline continue revising?
+
+    Returns True if revisions should continue, False to stop and move on.
+    """
+    revision_count = len(state.get("revision_history", []))
+    quality_history = state.get("revision_quality_history", [])
+
+    # Time budget — stop revising if time is tight
+    tier = _time_tier(state)
+    if tier in ("MINIMAL", "EMERGENCY"):
+        return False
+    if tier == "TAPER" and revision_count >= 1:
+        return False
+
+    # Hard ceiling — never exceed
+    if revision_count >= HARD_CEILING:
+        return False
+
+    # Not enough data to judge — continue
+    if len(quality_history) < 2:
+        return True
+
+    # Quality stalling — stop after STALL_PATIENCE consecutive non-improvements
+    if _stall_count(quality_history) >= STALL_PATIENCE:
+        return False
+
+    return True
+
+
+def _build_taper_context(state: MCRSState) -> Optional[str]:
+    """Build tapering context string when revisions exceed TAPER_AFTER.
+
+    Returns a message to inject into agent prompts, or None if not yet tapering.
+    """
+    revision_count = len(state.get("revision_history", []))
+    if revision_count < TAPER_AFTER:
+        return None
+
+    quality_history = state.get("revision_quality_history", [])
+    recent_scores = [h.get("score", 0) for h in quality_history[-3:]]
+    scores_str = ", ".join(f"{s:.2f}" for s in recent_scores)
+
+    remaining = HARD_CEILING - revision_count
+    context = (
+        f"REVISION ADVISORY: This is revision {revision_count}. "
+        f"Recent quality scores: [{scores_str}]. "
+        f"At most {remaining} revision(s) remain before the hard ceiling. "
+        f"Focus on resolving only the highest-impact issues. "
+        f"Accept minor imperfections and finalize the strongest possible version."
+    )
+
+    # Add time urgency if budget is running low
+    time_remaining = _remaining_seconds(state)
+    if time_remaining is not None and time_remaining < 1800:
+        mins = int(time_remaining / 60)
+        context += f" TIME BUDGET: ~{mins} minutes remaining. Prioritize finishing over perfection."
+
+    return context
+
+
+def _remaining_seconds(state: MCRSState) -> Optional[float]:
+    """Seconds left in the time budget, or None if unlimited."""
+    budget = state.get("time_budget_seconds")
+    start = state.get("pipeline_start_time")
+    if not budget or not start:
+        return None
+    return budget - (_time.time() - start)
+
+
+def _time_tier(state: MCRSState) -> str:
+    """Classify remaining time into a behavior tier."""
+    remaining = _remaining_seconds(state)
+    if remaining is None:
+        return "FULL"
+    if remaining > 1800:    # >30 min
+        return "FULL"
+    if remaining > 900:     # 15-30 min
+        return "TAPER"
+    if remaining > 300:     # 5-15 min
+        return "MINIMAL"
+    return "EMERGENCY"      # <5 min
 
 
 def create_mcrs_app(checkpointer: Optional[Any] = None) -> Any:
@@ -258,6 +396,7 @@ def draft_writer_node(state: MCRSState) -> dict[str, Any]:
 
     revision_count = len(state.get("revision_history", []))
     repair_context = _repair_context_for_node(state, "draft_writer")
+    taper_context = _build_taper_context(state)
     result = run_draft_writer(
         execution_brief=state["execution_brief"],
         claim_ledger=state["claim_ledger"],
@@ -265,6 +404,7 @@ def draft_writer_node(state: MCRSState) -> dict[str, Any]:
         content_blueprint=state["content_blueprint"],
         repair_context=repair_context,
         learnings_context=state.get("learnings_context"),
+        taper_context=taper_context,
     )
     from datetime import datetime
 
@@ -301,13 +441,22 @@ def draft_writer_node(state: MCRSState) -> dict[str, Any]:
 def adversarial_reviewer_node(state: MCRSState) -> dict[str, Any]:
     from artifactforge.agents import run_adversarial_reviewer
 
+    taper_context = _build_taper_context(state)
     result = run_adversarial_reviewer(
         draft=state["draft_v1"] or "",
         claim_ledger=state["claim_ledger"],
         execution_brief=state["execution_brief"],
+        research_map=state.get("research_map"),
         learnings_context=state.get("learnings_context"),
+        taper_context=taper_context,
     )
-    return {"red_team_review": result, "repair_context": None}
+
+    # Record quality snapshot after each review for adaptive control
+    updates: dict[str, Any] = {"red_team_review": result, "repair_context": None}
+    snapshot = _compute_quality_snapshot({**state, "red_team_review": result})
+    updates["revision_quality_history"] = state.get("revision_quality_history", []) + [snapshot]
+
+    return updates
 
 
 @trace_node("verifier")
@@ -523,24 +672,31 @@ def visual_generator_node(state: MCRSState) -> dict[str, Any]:
 
 
 def route_after_review(state: MCRSState) -> Literal["revise", "verify"]:
+    # Time budget: skip revisions entirely if time is critical
+    if _time_tier(state) == "EMERGENCY":
+        _emit_route_decision(state, "adversarial_reviewer", "verifier", "Time budget: EMERGENCY, skipping revisions")
+        return "verify"
+
     issues = _review_issues(state)
     high_severity = [i for i in issues if i.get("severity") == "HIGH"]
-    revision_count = len(state.get("revision_history", []))
 
-    if high_severity and revision_count < MAX_REVISIONS:
+    if high_severity and _should_continue_revising(state):
+        stalls = _stall_count(state.get("revision_quality_history", []))
+        revision_count = len(state.get("revision_history", []))
         _emit_route_decision(
             state,
             "adversarial_reviewer",
             "draft_writer",
-            f"{len(high_severity)} HIGH severity review issue(s)",
+            f"{len(high_severity)} HIGH issue(s); revision {revision_count}, stalls={stalls}",
         )
         return "revise"
 
+    reason = "No HIGH issues" if not high_severity else "Adaptive control: quality stalled or ceiling reached"
     _emit_route_decision(
         state,
         "adversarial_reviewer",
         "verifier",
-        "No blocking HIGH severity review issues",
+        reason,
     )
     return "verify"
 
@@ -549,6 +705,12 @@ def route_after_polisher(
     state: MCRSState,
 ) -> Literal["adversarial_reviewer", "visual_designer", "end"]:
     """Route polisher output based on whether it was invoked as repair."""
+    # Time budget: skip visuals if time is tight
+    tier = _time_tier(state)
+    if tier in ("MINIMAL", "EMERGENCY"):
+        _emit_route_decision(state, "polisher", "end", f"Time budget: {tier}, skipping visuals")
+        return "end"
+
     repair_context = state.get("repair_context")
     if repair_context:
         _emit_route_decision(
@@ -592,9 +754,17 @@ def route_after_arbiter(
     "visual_designer",
     "end",
 ]:
+    # Time budget: force forward if time is critical
+    tier = _time_tier(state)
+    if tier == "EMERGENCY":
+        _emit_route_decision(state, "final_arbiter", "end", "Time budget: EMERGENCY, outputting draft as-is")
+        return "end"
+    if tier == "MINIMAL":
+        _emit_route_decision(state, "final_arbiter", "polisher", "Time budget: MINIMAL, skipping repairs")
+        return "polisher"
+
     decision = cast(dict[str, Any], state.get("release_decision") or {})
     status = decision.get("status", "NOT_READY")
-    revision_count = len(state.get("revision_history", []))
 
     if status == "READY":
         _emit_route_decision(
@@ -605,12 +775,14 @@ def route_after_arbiter(
         )
         return "polisher"
 
-    if revision_count >= MAX_REVISIONS:
+    if not _should_continue_revising(state):
+        revision_count = len(state.get("revision_history", []))
+        stalls = _stall_count(state.get("revision_quality_history", []))
         _emit_route_decision(
             state,
             "final_arbiter",
             "polisher",
-            f"Revision limit reached ({revision_count}/{MAX_REVISIONS}); proceeding to polish",
+            f"Adaptive stop: revision {revision_count}, stalls={stalls}, ceiling={HARD_CEILING}",
         )
         return "polisher"
 
@@ -668,4 +840,4 @@ def route_after_arbiter(
 
 mcrs_app = create_mcrs_app()
 
-__all__ = ["create_mcrs_app", "mcrs_app", "MAX_REVISIONS"]
+__all__ = ["create_mcrs_app", "mcrs_app", "HARD_CEILING", "STALL_PATIENCE", "TAPER_AFTER"]

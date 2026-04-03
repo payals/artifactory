@@ -14,6 +14,12 @@ logger = logging.getLogger(__name__)
 LEARNINGS_CONFIDENCE_THRESHOLD = 0.7
 # Max learnings injected per agent per run
 LEARNINGS_CAP_PER_AGENT = 5
+# Learnings older than this are excluded from injection
+LEARNINGS_MAX_AGE_DAYS = 90
+# Learnings applied this many times with zero successes are excluded
+LEARNINGS_MIN_SUCCESS_AFTER_N_APPLIES = 3
+# How much a single success/failure nudges confidence (exponential moving average)
+CONFIDENCE_ALPHA = 0.15
 
 # Map pipeline nodes to Execution.phase for grouping
 _NODE_PHASE = {
@@ -264,6 +270,8 @@ class PipelinePersistence:
             high_count = sum(1 for i in issues if i.get("severity") == "HIGH")
             medium_count = sum(1 for i in issues if i.get("severity") == "MEDIUM")
 
+            overall_score = 1.0 if passed else max(0.0, 1.0 - high_count * 0.3 - medium_count * 0.1)
+
             evaluation = Evaluation(
                 artifact_id=uuid.UUID(artifact_id),
                 evaluation_type="agent_review",
@@ -271,11 +279,14 @@ class PipelinePersistence:
                 issues=issues,
                 passed=passed,
                 confidence=confidence,
-                overall_score=1.0 if passed else max(0.0, 1.0 - high_count * 0.3 - medium_count * 0.1),
+                overall_score=overall_score,
                 created_at=_now(),
             )
             session.add(evaluation)
             session.commit()
+
+            # Backfill quality_score on prompt snapshots for this artifact
+            self.backfill_quality_scores(artifact_id, overall_score)
         except Exception as e:
             session.rollback()
             logger.error("Failed to record evaluation for %s: %s", node_name, e)
@@ -454,48 +465,65 @@ class PipelinePersistence:
         self,
         agent_name: str,
         artifact_type: str,
-    ) -> Optional[dict[str, Any]]:
-        """Fetch relevant learnings for an agent, filtered by confidence threshold and capped.
+    ) -> tuple[Optional[dict[str, Any]], list[str]]:
+        """Fetch relevant learnings for an agent, filtered by confidence, age, and effectiveness.
 
-        Returns a dict suitable for prompt injection, or None if no learnings found.
+        Returns:
+            Tuple of (learnings context dict for prompt injection, list of learning IDs applied).
+            Context is None if no learnings found.
         """
         if not self._enabled:
-            return None
+            return None, []
 
-        from sqlalchemy import desc
+        from datetime import timedelta
+
+        from sqlalchemy import and_, desc, or_
 
         from artifactforge.db.models_learnings import Learnings
 
         session = _get_session()
         if session is None:
-            return None
+            return None, []
 
         try:
-            # Query learnings relevant to this artifact type with confidence above threshold
+            age_cutoff = _now() - timedelta(days=LEARNINGS_MAX_AGE_DAYS)
+
             rows = (
                 session.query(Learnings)
                 .filter(
                     Learnings.artifact_type == artifact_type,
                     Learnings.confidence >= LEARNINGS_CONFIDENCE_THRESHOLD,
+                    # Deprecation: exclude learnings older than max age
+                    Learnings.created_at >= age_cutoff,
+                    # Deprecation: exclude proven-ineffective learnings
+                    or_(
+                        Learnings.times_applied < LEARNINGS_MIN_SUCCESS_AFTER_N_APPLIES,
+                        Learnings.times_succeeded > 0,
+                    ),
                 )
-                .order_by(desc(Learnings.confidence), desc(Learnings.created_at))
+                .order_by(
+                    # Prefer validated learnings, then by confidence
+                    desc(Learnings.is_validated),
+                    desc(Learnings.confidence),
+                    desc(Learnings.created_at),
+                )
                 .limit(LEARNINGS_CAP_PER_AGENT)
                 .all()
             )
 
             if not rows:
-                return None
+                return None, []
 
-            # Build learnings context dict for prompt injection
             insights = []
+            learning_ids = []
             for row in rows:
-                insight = {
+                insights.append({
                     "failure_mode": row.failure_mode,
                     "fix_applied": row.fix_applied,
                     "confidence": float(row.confidence),
                     "source": row.source,
-                }
-                insights.append(insight)
+                })
+                learning_ids.append(str(row.id))
 
             # Update times_applied counter
             for row in rows:
@@ -506,12 +534,392 @@ class PipelinePersistence:
                 "agent": agent_name,
                 "artifact_type": artifact_type,
                 "insights": insights,
-            }
+            }, learning_ids
 
         except Exception as e:
             session.rollback()
             logger.error("Failed to fetch learnings for %s: %s", agent_name, e)
+            return None, []
+        finally:
+            session.close()
+
+    # ------------------------------------------------------------------
+    # Learnings — confidence updates (feedback loop)
+    # ------------------------------------------------------------------
+
+    def update_learnings_outcome(
+        self,
+        learning_ids: list[str],
+        success: bool,
+    ) -> None:
+        """Update confidence of applied learnings based on run outcome.
+
+        After a pipeline run completes, this recalculates confidence for each
+        learning that was injected, based on whether the run succeeded.
+        Uses exponential moving average: new = old + alpha * (outcome - old).
+        """
+        if not self._enabled or not learning_ids:
+            return
+
+        from artifactforge.db.models import Artifact  # noqa: F401 — FK resolution
+        from artifactforge.db.models_learnings import Learnings
+
+        session = _get_session()
+        if session is None:
+            return
+
+        try:
+            for lid in learning_ids:
+                row = session.get(Learnings, uuid.UUID(lid))
+                if not row:
+                    continue
+
+                if success:
+                    row.times_succeeded = (row.times_succeeded or 0) + 1
+
+                # Recalculate confidence via EMA
+                outcome = 1.0 if success else 0.0
+                old_conf = float(row.confidence)
+                new_conf = old_conf + CONFIDENCE_ALPHA * (outcome - old_conf)
+                row.confidence = max(0.05, min(0.95, new_conf))
+
+            session.commit()
+            logger.info(
+                "Updated %d learnings: outcome=%s",
+                len(learning_ids),
+                "success" if success else "failure",
+            )
+        except Exception as e:
+            session.rollback()
+            logger.error("Failed to update learnings outcome: %s", e)
+        finally:
+            session.close()
+
+    # ------------------------------------------------------------------
+    # Learnings — validation and lifecycle management
+    # ------------------------------------------------------------------
+
+    def validate_learning(self, learning_id: str, validated: bool = True) -> bool:
+        """Mark a learning as validated (or invalidated) by a human.
+
+        Validated learnings get a confidence boost and are prioritized in injection.
+        Invalidated learnings have their confidence zeroed out.
+        """
+        if not self._enabled:
+            return False
+
+        from artifactforge.db.models import Artifact  # noqa: F401 — FK resolution
+        from artifactforge.db.models_learnings import Learnings
+
+        session = _get_session()
+        if session is None:
+            return False
+
+        try:
+            row = session.get(Learnings, uuid.UUID(learning_id))
+            if not row:
+                return False
+
+            row.is_validated = validated
+            row.validated_at = _now()
+
+            if validated:
+                # Boost confidence — validated learnings are trustworthy
+                row.confidence = min(0.95, float(row.confidence) + 0.15)
+            else:
+                # Zero out — human says this learning is wrong
+                row.confidence = 0.0
+
+            session.commit()
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error("Failed to validate learning %s: %s", learning_id, e)
+            return False
+        finally:
+            session.close()
+
+    def prune_learnings(self) -> int:
+        """Remove deprecated learnings that will never be injected again.
+
+        Criteria:
+        - Confidence below threshold AND applied 3+ times with zero successes
+        - Older than max age
+        - Explicitly invalidated (is_validated=True with confidence=0)
+
+        Returns number of rows deleted.
+        """
+        if not self._enabled:
+            return 0
+
+        from datetime import timedelta
+
+        from sqlalchemy import and_, or_
+
+        from artifactforge.db.models_learnings import Learnings
+
+        session = _get_session()
+        if session is None:
+            return 0
+
+        try:
+            age_cutoff = _now() - timedelta(days=LEARNINGS_MAX_AGE_DAYS)
+
+            stale = (
+                session.query(Learnings)
+                .filter(
+                    or_(
+                        # Expired by age
+                        Learnings.created_at < age_cutoff,
+                        # Proven ineffective
+                        and_(
+                            Learnings.times_applied >= LEARNINGS_MIN_SUCCESS_AFTER_N_APPLIES,
+                            Learnings.times_succeeded == 0,
+                            Learnings.confidence < LEARNINGS_CONFIDENCE_THRESHOLD,
+                        ),
+                        # Explicitly invalidated
+                        and_(
+                            Learnings.is_validated == True,
+                            Learnings.confidence <= 0.0,
+                        ),
+                    )
+                )
+                .all()
+            )
+
+            count = len(stale)
+            for row in stale:
+                session.delete(row)
+            session.commit()
+
+            if count:
+                logger.info("Pruned %d deprecated learnings", count)
+            return count
+        except Exception as e:
+            session.rollback()
+            logger.error("Failed to prune learnings: %s", e)
+            return 0
+        finally:
+            session.close()
+
+    # ------------------------------------------------------------------
+    # Prompt snapshots — capture every LLM call
+    # ------------------------------------------------------------------
+
+    def persist_prompt_snapshot(
+        self,
+        artifact_id: Optional[str],
+        agent_name: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_text: Optional[str],
+        response_tokens: int,
+        model: Optional[str],
+        temperature: float,
+        duration_ms: float,
+        learnings_context: Optional[dict] = None,
+    ) -> None:
+        """Persist a prompt snapshot for every LLM call."""
+        if not self._enabled:
+            return
+
+        from artifactforge.db.models import Artifact  # noqa: F401
+        from artifactforge.db.models_prompts import PromptSnapshot
+
+        session = _get_session()
+        if session is None:
+            return
+
+        try:
+            snapshot = PromptSnapshot(
+                artifact_id=uuid.UUID(artifact_id) if artifact_id else None,
+                agent_name=agent_name or "unknown",
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                learnings_injected=learnings_context,
+                response_text=response_text or None,
+                response_tokens=response_tokens,
+                model=model,
+                temperature=temperature,
+                duration_ms=duration_ms,
+                created_at=_now(),
+            )
+            session.add(snapshot)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.debug("Failed to persist prompt snapshot: %s", e)
+        finally:
+            session.close()
+
+    def backfill_quality_scores(
+        self,
+        artifact_id: str,
+        quality_score: float,
+    ) -> int:
+        """Backfill quality_score on prompt_snapshots for a given artifact.
+
+        Called after evaluations are recorded so each prompt gets its outcome signal.
+        Returns number of rows updated.
+        """
+        if not self._enabled or not artifact_id:
+            return 0
+
+        from artifactforge.db.models import Artifact  # noqa: F401
+        from artifactforge.db.models_prompts import PromptSnapshot
+
+        session = _get_session()
+        if session is None:
+            return 0
+
+        try:
+            artifact_uuid = uuid.UUID(artifact_id)
+            rows = (
+                session.query(PromptSnapshot)
+                .filter(
+                    PromptSnapshot.artifact_id == artifact_uuid,
+                    PromptSnapshot.quality_score.is_(None),
+                )
+                .all()
+            )
+            for row in rows:
+                row.quality_score = quality_score
+            session.commit()
+            return len(rows)
+        except Exception as e:
+            session.rollback()
+            logger.debug("Failed to backfill quality scores: %s", e)
+            return 0
+        finally:
+            session.close()
+
+    def list_prompt_snapshots(
+        self,
+        artifact_id: Optional[str] = None,
+        agent_name: Optional[str] = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """List prompt snapshots, optionally filtered."""
+        if not self._enabled:
+            return []
+
+        from sqlalchemy import desc
+
+        from artifactforge.db.models import Artifact  # noqa: F401
+        from artifactforge.db.models_prompts import PromptSnapshot
+
+        session = _get_session()
+        if session is None:
+            return []
+
+        try:
+            query = session.query(PromptSnapshot)
+            if artifact_id:
+                query = query.filter(PromptSnapshot.artifact_id == uuid.UUID(artifact_id))
+            if agent_name:
+                query = query.filter(PromptSnapshot.agent_name == agent_name)
+            rows = query.order_by(desc(PromptSnapshot.created_at)).limit(limit).all()
+
+            return [
+                {
+                    "id": str(row.id),
+                    "artifact_id": str(row.artifact_id) if row.artifact_id else None,
+                    "agent_name": row.agent_name,
+                    "model": row.model,
+                    "system_prompt_len": len(row.system_prompt) if row.system_prompt else 0,
+                    "user_prompt_len": len(row.user_prompt) if row.user_prompt else 0,
+                    "response_tokens": row.response_tokens,
+                    "duration_ms": row.duration_ms,
+                    "quality_score": row.quality_score,
+                    "has_learnings": bool(row.learnings_injected),
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in rows
+            ]
+        except Exception as e:
+            logger.error("Failed to list prompt snapshots: %s", e)
+            return []
+        finally:
+            session.close()
+
+    def get_prompt_snapshot(self, snapshot_id: str) -> Optional[dict[str, Any]]:
+        """Get full prompt snapshot by ID (includes full prompt text)."""
+        if not self._enabled:
             return None
+
+        from artifactforge.db.models import Artifact  # noqa: F401
+        from artifactforge.db.models_prompts import PromptSnapshot
+
+        session = _get_session()
+        if session is None:
+            return None
+
+        try:
+            row = session.get(PromptSnapshot, uuid.UUID(snapshot_id))
+            if not row:
+                return None
+            return {
+                "id": str(row.id),
+                "artifact_id": str(row.artifact_id) if row.artifact_id else None,
+                "agent_name": row.agent_name,
+                "system_prompt": row.system_prompt,
+                "user_prompt": row.user_prompt,
+                "learnings_injected": row.learnings_injected,
+                "response_text": row.response_text,
+                "response_tokens": row.response_tokens,
+                "model": row.model,
+                "temperature": row.temperature,
+                "duration_ms": row.duration_ms,
+                "quality_score": row.quality_score,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+        except Exception as e:
+            logger.error("Failed to get prompt snapshot: %s", e)
+            return None
+        finally:
+            session.close()
+
+    def list_learnings(
+        self,
+        artifact_type: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """List all learnings, optionally filtered by artifact type."""
+        if not self._enabled:
+            return []
+
+        from sqlalchemy import desc
+
+        from artifactforge.db.models_learnings import Learnings
+
+        session = _get_session()
+        if session is None:
+            return []
+
+        try:
+            query = session.query(Learnings)
+            if artifact_type:
+                query = query.filter(Learnings.artifact_type == artifact_type)
+            rows = query.order_by(desc(Learnings.confidence)).all()
+
+            return [
+                {
+                    "id": str(row.id),
+                    "artifact_type": row.artifact_type,
+                    "failure_mode": row.failure_mode,
+                    "fix_applied": row.fix_applied,
+                    "confidence": float(row.confidence),
+                    "times_applied": row.times_applied or 0,
+                    "times_succeeded": row.times_succeeded or 0,
+                    "source": row.source,
+                    "outcome": row.outcome,
+                    "is_validated": row.is_validated,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in rows
+            ]
+        except Exception as e:
+            logger.error("Failed to list learnings: %s", e)
+            return []
         finally:
             session.close()
 

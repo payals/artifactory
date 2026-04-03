@@ -23,6 +23,7 @@ class ExecutionBrief(TypedDict):
     rigor_level: Literal["LOW", "MEDIUM", "HIGH"]
     persuasion_level: Literal["LOW", "MEDIUM", "HIGH"]
     open_questions_to_resolve: list[str]
+    scope_guidance: Optional[dict]  # {"min_items": N, "max_items": N, "breadth_preference": "broad"|"deep"|"balanced"}
     intent_mode: Literal["auto", "interactive"]
     answers_collected: dict[str, str]
 
@@ -30,6 +31,25 @@ class ExecutionBrief(TypedDict):
 # =============================================================================
 # Phase 2: Research
 # =============================================================================
+
+
+class ResearchQuery(TypedDict):
+    """A single typed research query within a research plan."""
+
+    question: str  # What we need to find out
+    search_query: str  # The actual search string to use
+    category: str  # LLM-inferred: e.g. "demographic", "competitive", "technical", "regulatory", "academic", etc.
+    priority: Literal["HIGH", "MEDIUM", "LOW"]
+    why_needed: str  # How this connects to the user's goal
+
+
+class ResearchPlan(TypedDict):
+    """LLM-generated research plan — typed queries grouped by category."""
+
+    categories: list[str]  # Unique category names inferred from the topic
+    queries: list[ResearchQuery]
+    research_depth: Literal["shallow", "medium", "deep"]
+    domain_context: str  # Brief description of the domain for downstream agents
 
 
 class ResearchSource(TypedDict):
@@ -55,6 +75,7 @@ class ResearchMap(TypedDict):
     competing_views: list[str]  # Conflicting perspectives
     data_gaps: list[str]  # Known missing information
     followup_questions: list[str]
+    research_plan: Optional[ResearchPlan]  # The plan that drove the research
 
 
 # =============================================================================
@@ -105,6 +126,14 @@ class AnalyticalBackbone(TypedDict):
 # =============================================================================
 
 
+class SectionDataRequirement(TypedDict):
+    """What data/frameworks a section needs to be substantive."""
+
+    required_data: list[str]  # Specific data points needed (e.g. "population count", "API latency benchmarks")
+    required_frameworks: list[str]  # Analytical frameworks to apply (e.g. "competitive_matrix", "risk_severity_table")
+    specificity: str  # Guidance on precision level (e.g. "Use exact figures with sources, not ranges")
+
+
 class ContentBlueprint(TypedDict):
     """Output from Output Strategist - communication structure."""
 
@@ -114,6 +143,7 @@ class ContentBlueprint(TypedDict):
     visual_elements: list[dict]  # Tables, charts, diagrams to include
     key_takeaways: list[str]  # 3-5 main points to remember
     audience_guidance: list[str]  # How to help audience understand
+    section_data_requirements: Optional[dict[str, SectionDataRequirement]]  # section -> what data it needs
 
 
 # =============================================================================
@@ -315,8 +345,11 @@ ARTIFACT_SCHEMAS = {
 
 __all__ = [
     "ExecutionBrief",
+    "ResearchQuery",
+    "ResearchPlan",
     "ResearchSource",
     "ResearchMap",
+    "SectionDataRequirement",
     "Claim",
     "ClaimLedger",
     "AnalyticalBackbone",

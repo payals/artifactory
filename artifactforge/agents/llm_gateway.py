@@ -9,6 +9,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Optional, cast
 
+import httpx
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
+
 from artifactforge.agents.llm_client import (
     Provider,
     call_llm as _call_llm,
@@ -40,13 +48,13 @@ AGENT_MODEL_ROUTES: dict[str, str] = {
     "evidence_ledger": "precision",
     "adversarial_reviewer": "precision",
     "verifier": "precision",
-    # Writing tier — prose quality, creative generation, analytical depth
+    # Writing tier — prose quality, creative generation, analytical depth, research
     "output_strategist": "writing",
     "draft_writer": "writing",
     "analyst": "writing",
     "polisher": "writing",
+    "research_lead": "writing",
     # Speed tier — fast structured tasks, visual pipeline, routing decisions
-    "research_lead": "speed",
     "final_arbiter": "speed",
     "visual_designer": "speed",
     "visual_reviewer": "speed",
@@ -189,6 +197,26 @@ def clear_history() -> None:
     CALL_HISTORY.clear()
 
 
+# ---------------------------------------------------------------------------
+# Retry helpers
+# ---------------------------------------------------------------------------
+
+_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503})
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Return True for transient errors that should be retried."""
+    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _RETRYABLE_STATUS_CODES
+    # Check wrapped cause (RuntimeError wrapping a retryable httpx error)
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None:
+        return _is_retryable(cause)
+    return False
+
+
 async def call_llm_async(
     system_prompt: str,
     user_prompt: str,
@@ -196,7 +224,7 @@ async def call_llm_async(
     provider: Optional[str] = None,
     model: Optional[str] = None,
     temperature: float = 0.7,
-    max_tokens: int = 32000,
+    max_tokens: int = 128000,
 ) -> str:
     if provider is None:
         provider = get_provider()
@@ -229,8 +257,30 @@ async def call_llm_async(
         },
     )
 
-    try:
-        output = await _call_llm(
+    def _log_retry(retry_state) -> None:
+        exc = retry_state.outcome.exception()
+        attempt = retry_state.attempt_number
+        wait = retry_state.next_action.sleep if retry_state.next_action else 0
+        logger.warning(
+            "LLM request %s retry %d/3 (waiting %.1fs): %s",
+            request_id, attempt, wait, exc,
+        )
+        emit_status(
+            f"Retry {attempt}/3 after {type(exc).__name__}, waiting {wait:.0f}s",
+            trace_id=get_trace_id(),
+            node_name=agent_name,
+            metadata={"kind": "llm_retry", "attempt": attempt},
+        )
+
+    @retry(
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=1, min=1, max=8),
+        retry=retry_if_exception(_is_retryable),
+        before_sleep=_log_retry,
+        reraise=True,
+    )
+    async def _call_with_retry() -> str:
+        return await _call_llm(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             provider=provider,
@@ -238,6 +288,9 @@ async def call_llm_async(
             temperature=temperature,
             max_tokens=max_tokens,
         )
+
+    try:
+        output = await _call_with_retry()
         success = True
         output_tokens = estimate_tokens(output)
         emit_status(
@@ -252,7 +305,16 @@ async def call_llm_async(
         )
     except Exception as e:
         error = str(e)
-        logger.warning(f"LLM request {request_id} failed: {e}")
+        retries = getattr(e, "last_attempt", None)
+        retry_info = ""
+        if retries is not None:
+            retry_info = f" (after {retries.attempt_number} attempts)"
+        else:
+            # Check if tenacity exhausted retries
+            cause = getattr(e, "__cause__", None)
+            if cause and hasattr(cause, "last_attempt"):
+                retry_info = f" (after {cause.last_attempt.attempt_number} attempts)"
+        logger.warning(f"LLM request {request_id} failed{retry_info}: {e}")
         raise RuntimeError(f"LLM request failed: {error}") from e
 
     duration_ms = (time.perf_counter() - start_time) * 1000
@@ -278,7 +340,7 @@ async def call_llm_async(
         output_tokens=output_tokens,
         input_tokens=input_tokens,
         cost_usd=0.0,
-        raw_response=output[:200] if output else None,
+        raw_response=output or None,
     )
 
     call = LLMCall(request=request, response=response)
@@ -327,7 +389,7 @@ def call_llm(
     provider: Optional[str] = None,
     model: Optional[str] = None,
     temperature: float = 0.7,
-    max_tokens: int = 32000,
+    max_tokens: int = 128000,
 ) -> str:
     try:
         asyncio.get_running_loop()
@@ -363,7 +425,7 @@ def call_llm_sync(
     provider: Optional[str] = None,
     model: Optional[str] = None,
     temperature: float = 0.7,
-    max_tokens: int = 32000,
+    max_tokens: int = 128000,
 ) -> str:
     try:
         asyncio.get_running_loop()
